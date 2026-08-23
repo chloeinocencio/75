@@ -1,79 +1,110 @@
 # 75
 
-Native SwiftUI app for tracking the 75 Soft / 75 Hard challenge, with daily
-progress photos as a first-class feature.
+Native SwiftUI app for tracking the **75 Soft**, **75 Medium**, and **75 Hard**
+challenges, with progress photos as a first-class feature.
 
-## What's built and working
+## The three tiers, as implemented
 
-- **Onboarding** — pick 75 Soft or 75 Hard, starts your 75-day countdown.
-- **Today** — daily checklist generated from your mode's rules (workouts,
-  diet, water with a live counter, reading pages, progress photo, no-alcohol
-  for Hard mode), a completion ring, streak, and overall % complete. 75 Soft
-  also exposes a weekly rest-day toggle; 75 Hard does not.
-- **Progress Photo capture** — full-screen camera with:
-  - A **ghost overlay** of your most recent photo (per pose) at adjustable
-    opacity, so you can line up the same framing every day.
-  - An **Align mode** that switches to a difference blend — the outline
-    fades to black as your pose matches, which is faster than eyeballing
-    opacity.
-  - Front / Side / Back pose selector, front/back camera flip, retake flow.
-  - Photos are saved as JPEGs in the app's private Application Support
-    directory (not your Photos library, not iCloud) — referenced by
-    filename from SwiftData, so the database itself never holds image blobs.
-- **Photo Timeline** — grid of every day's photo per pose, tap into a
-  swipeable full-screen viewer.
-- **Before/After Compare** — pick any two days, drag a divider to reveal one
-  photo over the other, and explicitly share a composited image via the
-  share sheet.
-- **Friends (local only, see below)** — add a friend by phone number, a
-  single "Share My Progress" toggle. Progress *photos* are never shared by
-  that toggle — only by the explicit Compare-view share action.
+The tiers differ in more than difficulty — they have genuinely different rules,
+different units, and different failure semantics. The app models all three
+rather than treating them as one checklist with a strictness dial.
+
+| | 75 Soft | 75 Medium | 75 Hard |
+|---|---|---|---|
+| **Workout** | 45 min, 1×/day | 45 min, 1×/day | 45 min, 2×/day (1 outdoors) |
+| **Rest days** | 1 active-recovery day/week | none | none |
+| **Diet** | Eat well | On plan 90% of the time | Strict, zero cheat meals |
+| **Alcohol** | Social occasions only | None | None |
+| **Water** | 3 L | ½ body weight in oz | 1 gallon |
+| **Reading** | 10 pages, any book | 10 minutes, incl. podcasts | 10 pages, non-fiction only |
+| **Meditation** | — | 5 min/day | — |
+| **Progress photo** | Day 1 + Day 75 | Day 1 + Day 75 | **Daily, required** |
+| **Miss a day** | Continue, no penalty | Up to 7 misses (finish 68/75) | **Restart at Day 1** |
+
+Those last two rows drive real behavior:
+
+- **Photo cadence.** A daily progress photo is a 75 Hard rule, not a universal
+  one. Soft and Medium put the photo on a milestone card (Day 1 and Day 75,
+  optional in between) instead of in the daily checklist, so the checklist
+  reflects what the tier actually requires.
+- **Failure policy.** `FailurePolicy` is `.forgiving` / `.allowedMisses(7)` /
+  `.restartFromDayOne`. Hard shows a restart banner after a missed day and
+  keeps an attempt counter; Medium shows a "misses left" stat instead of an
+  overall-percentage stat.
+- **Water units.** Medium scales to body weight, so onboarding asks for it and
+  `WaterGoal.resolvedLiters(bodyWeightPounds:)` resolves the goal per tier.
+
+### On rule accuracy
+
+75 Hard is a specific program with published rules
+([andyfrisella.com](https://andyfrisella.com/blogs/articles/what-is-75-hard)) —
+those are implemented as written.
+
+75 Soft and 75 Medium are community variants with no owner, and published
+versions disagree on details. The rules above follow the most widely repeated
+consensus ([Cleveland Clinic](https://health.clevelandclinic.org/75-soft-challenge),
+[Healthline](https://www.healthline.com/health/75-soft-challenge),
+[Marathon Handbook](https://marathonhandbook.com/75-medium-challenge/)). Since
+nobody owns them, per-user goal overrides are a reasonable future addition.
+
+## Progress photo features
+
+- **Ghost overlay** — your last photo of the same pose is superimposed at
+  adjustable opacity so you can match framing day to day.
+- **Align mode** — switches to a difference blend; the outline fades toward
+  black as your pose matches, which is faster than judging opacity by eye.
+- **Poses** — Front / Side / Back tracked separately, each with its own
+  overlay history and timeline.
+- **Timeline** — grid of every photo per pose, tap into a swipeable viewer.
+- **Before/After compare** — pick any two days, drag a divider to reveal one
+  over the other, share a flattened composite via the system share sheet.
+- Photos are stored as JPEGs in the app's private Application Support
+  directory — not the Photos library, not iCloud. SwiftData holds filenames,
+  never image blobs.
 
 ## What's a stub, on purpose
 
-Friends today are stored **only on your device**. There is no backend, so:
+Friends are stored **only on this device**. There's no backend, so adding a
+friend doesn't notify or verify them, and the "Share My Progress" toggle
+doesn't transmit anything yet.
 
-- Adding a "friend" doesn't notify them or verify their number.
-- The share toggle doesn't transmit anything anywhere yet.
+Shipping real sharing needs:
+- Phone verification (Firebase Phone Auth or Twilio Verify)
+- A datastore for friend graphs and daily progress snapshots (Firebase or
+  Supabase are the fastest paths for a solo iOS dev)
+- Push notifications for invites and nudges (APNs)
 
-Shipping real friend sharing needs a small backend, which we should scope
-next:
-- Phone number verification (e.g. Firebase Phone Auth or Twilio Verify).
-- A server/datastore for friend graphs and daily progress snapshots
-  (Firebase/Firestore or Supabase are the fastest paths for a solo iOS dev).
-- Push notifications for invites and daily nudges (APNs).
-
-None of that is required to use the app solo — everything else (checklist,
-streaks, and the photo features you asked about) is fully functional
-offline, on-device.
+Everything else works offline and on-device.
 
 ## Opening the project
 
-This repo ships Swift source + an [XcodeGen](https://github.com/yonaskolb/XcodeGen)
-manifest instead of a checked-in `.xcodeproj` (those don't diff or merge
+Swift source plus an [XcodeGen](https://github.com/yonaskolb/XcodeGen)
+manifest, rather than a checked-in `.xcodeproj` (those don't diff or merge
 well). On a Mac with Xcode 15+:
 
 ```sh
 brew install xcodegen   # one-time
 xcodegen generate
-open 75SoftTracker.xcodeproj
+open SeventyFive.xcodeproj
 ```
 
-Run on a real device to test the camera — the iOS Simulator has no camera
-hardware, so the capture screen will show the "camera access needed" state
-there.
+Run on a real device to test the camera — the Simulator has no camera, so the
+capture screen shows its permission-denied state there.
 
-## Project layout
+## Layout
 
 ```
-project.yml                     XcodeGen manifest (targets, Info.plist, permissions)
-75SoftTracker/
-  App/                          App entry point + root tab navigation
-  Models/                       SwiftData models: Challenge, DailyEntry, ProgressPhoto, Friend
-  Services/                     PhotoStorageService (on-disk JPEG storage)
+project.yml            XcodeGen manifest (target, Info.plist, permissions)
+SeventyFive/
+  App/                 Entry point + root tab navigation
+  Models/              Challenge, DailyEntry, ProgressPhoto, Friend, ChallengeMode
+  Services/            PhotoStorageService (on-disk JPEG storage)
   Features/
-    Onboarding/                 Mode picker (Soft/Hard)
-    Today/                      Daily checklist
-    ProgressPhoto/              Camera capture, timeline, before/after compare
-    Friends/                    Friend list + sharing toggle (local-only, see above)
+    Onboarding/        Tier picker (Soft/Medium/Hard) + body weight for Medium
+    Today/             Daily checklist, streak, restart banner
+    ProgressPhoto/     Capture, timeline, before/after compare
+    Friends/           Friend list + sharing toggle (local-only, see above)
 ```
+
+The Swift module is named `SeventyFive` rather than `75` — a module name can't
+begin with a digit.

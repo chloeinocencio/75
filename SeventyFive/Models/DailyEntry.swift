@@ -10,6 +10,8 @@ final class DailyEntry {
     var completedTaskIDs: Set<String>
     var waterLiters: Double
     var pagesRead: Int
+    var readingMinutes: Int
+    var meditationMinutes: Int
     var notes: String
 
     var challenge: Challenge?
@@ -25,6 +27,8 @@ final class DailyEntry {
         self.completedTaskIDs = []
         self.waterLiters = 0
         self.pagesRead = 0
+        self.readingMinutes = 0
+        self.meditationMinutes = 0
         self.notes = ""
     }
 
@@ -46,6 +50,12 @@ final class DailyEntry {
 
     var isFullyComplete: Bool {
         guard let mode = challenge?.mode else { return false }
+        if mode.allowsWeeklyRestDay && isPlannedRestDay {
+            // A planned rest day excuses the workout but not the rest of the checklist.
+            return mode.tasks
+                .filter { if case .workout = $0 { return false }; return true }
+                .allSatisfy { completedTaskIDs.contains($0.id) }
+        }
         return mode.tasks.allSatisfy { completedTaskIDs.contains($0.id) }
     }
 

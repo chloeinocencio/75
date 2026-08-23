@@ -1,4 +1,4 @@
-name: 75SoftTracker
+name: SeventyFive
 options:
   bundleIdPrefix: com.chloeinocencio
   deploymentTarget:
@@ -8,24 +8,23 @@ settings:
   MARKETING_VERSION: "1.0"
   CURRENT_PROJECT_VERSION: "1"
 targets:
-  75SoftTracker:
+  SeventyFive:
     type: application
     platform: iOS
     sources:
-      - path: 75SoftTracker
+      - path: SeventyFive
     info:
-      path: 75SoftTracker/Info.plist
+      path: SeventyFive/Info.plist
       properties:
+        CFBundleDisplayName: "75"
         UILaunchScreen: {}
-        NSCameraUsageDescription: "75 Soft uses your camera to take your daily progress photo."
+        NSCameraUsageDescription: "75 uses your camera to take your progress photos."
         NSPhotoLibraryUsageDescription: "Save your progress photos to your library."
         NSPhotoLibraryAddUsageDescription: "Save your progress photos to your library."
-        NSContactsUsageDescription: "Match your phone contacts to find friends already using 75 Soft."
+        NSContactsUsageDescription: "Match your phone contacts to find friends already using 75."
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.chloeinocencio.75softtracker
+        PRODUCT_BUNDLE_IDENTIFIER: com.chloeinocencio.seventyfive
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1"
         ENABLE_PREVIEWS: true
-    capabilities:
-      - com.apple.developer.background-modes

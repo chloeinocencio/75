@@ -199,7 +199,11 @@ struct ProgressPhotoCaptureView: View {
                 photo.dailyEntry = dailyEntry
                 dailyEntry.photos.append(photo)
                 modelContext.insert(photo)
-                dailyEntry.markComplete(.progressPhoto)
+                // Only 75 Hard carries a daily photo task to check off; under Soft and
+                // Medium the photo is a milestone, not a checklist item.
+                if challenge.mode.photoCadence == .daily {
+                    dailyEntry.markComplete(.progressPhoto)
+                }
                 try modelContext.save()
                 await MainActor.run {
                     isSaving = false
