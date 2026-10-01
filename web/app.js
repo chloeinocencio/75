@@ -370,7 +370,7 @@ function viewToday() {
     } else if (task.type === "check") {
       h += `<button class="row" data-act="check" data-id="${task.id}" data-done="${taskDone(task, rec)}">
           <span class="row-glyph">${svg(ICON[task.icon])}</span>
-          <span class="row-label">${task.title}${task.note ? `<span class="row-note">${task.note}</span>` : ""}</span>
+          <span class="row-label"><span class="row-title">${task.title}</span>${task.note ? `<span class="row-note">${task.note}</span>` : ""}</span>
           <span class="row-check">${svg(ICON.tick)}</span></button>`;
     } else {
       const goal = goalFor(task);
@@ -378,7 +378,7 @@ function viewToday() {
       h += `<div class="counter" data-done="${taskDone(task, rec)}">
           <div class="counter-top">
             <span class="row-glyph">${svg(ICON[task.icon])}</span>
-            <span class="row-label">${task.title}${task.note ? `<span class="row-note">${task.note}</span>` : ""}</span>
+            <span class="row-label"><span class="row-title">${task.title}</span>${task.note ? `<span class="row-note">${task.note}</span>` : ""}</span>
             <span class="counter-amt">${fmtAmount(cur, task)} / ${fmtAmount(goal, task)}</span>
           </div>
           <div class="counter-ctrls">
