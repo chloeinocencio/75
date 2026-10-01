@@ -16,7 +16,7 @@
   --surface-2: #e5ded6;
   --fg: #0a0a0c;
   --fg-dim: #5e584f;
-  --fg-faint: #7e776c;
+  --fg-faint: #686157;   /* clears 4.5:1 on cream, white and the beige card */
   --line: #e3dcd2;
   --accent: #dae644;
   --accent-ink: #0a0a0c;
@@ -42,7 +42,7 @@
     --surface-2: #2a2720;
     --fg: #f0ebe3;
     --fg-dim: #a49c8f;
-    --fg-faint: #7a7265;
+    --fg-faint: #958d7f;   /* clears 4.5:1 on all three dark surfaces */
     --line: #333028;
     --accent: #dae644;
     --accent-ink: #14130e;
@@ -61,7 +61,7 @@
   --surface-2: #2a2720;
   --fg: #f0ebe3;
   --fg-dim: #a49c8f;
-  --fg-faint: #7a7265;
+  --fg-faint: #958d7f;   /* clears 4.5:1 on all three dark surfaces */
   --line: #333028;
   --accent: #dae644;
   --accent-ink: #14130e;
@@ -352,5 +352,83 @@ button { cursor: pointer; }
 .modal-card p { font-size: 13.5px; color: var(--fg-dim); margin-bottom: 11px; }
 .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; flex-wrap: wrap; }
 .modal .field { margin-bottom: 12px; }
+
+/* ---------------- living background ----------------
+   Three soft chartreuse fields drifting behind the app. Their opacity is driven by
+   --glow, which the Today screen sets to the day's completion, so the page literally
+   brightens as the checklist fills rather than being decoration that means nothing.
+   Gradients only, no blur filter: large filter: blur() is expensive on phones. */
+.aura {
+  position: fixed; inset: 0; z-index: 0;
+  pointer-events: none; overflow: hidden;
+  opacity: calc(.30 + var(--glow, 0) * .70);
+  transition: opacity 1.4s cubic-bezier(.4, 0, .2, 1);
+}
+.aura i {
+  position: absolute; display: block; border-radius: 50%;
+  width: 86vmin; height: 86vmin;
+  will-change: transform;
+}
+.aura i:nth-child(1) {
+  background: radial-gradient(circle at 50% 50%, rgba(218, 230, 68, .46), rgba(218, 230, 68, 0) 68%);
+  top: -30vmin; left: -24vmin;
+  animation: drift-a 46s ease-in-out infinite alternate;
+}
+.aura i:nth-child(2) {
+  background: radial-gradient(circle at 50% 50%, rgba(218, 230, 68, .30), rgba(218, 230, 68, 0) 70%);
+  bottom: -34vmin; right: -28vmin;
+  animation: drift-b 58s ease-in-out infinite alternate;
+}
+.aura i:nth-child(3) {
+  background: radial-gradient(circle at 50% 50%, rgba(255, 214, 140, .26), rgba(255, 214, 140, 0) 72%);
+  top: 34%; right: -36vmin;
+  animation: drift-c 52s ease-in-out infinite alternate;
+}
+@keyframes drift-a { from { transform: translate3d(0,0,0) scale(1) } to { transform: translate3d(14vmin, 10vmin, 0) scale(1.14) } }
+@keyframes drift-b { from { transform: translate3d(0,0,0) scale(1.08) } to { transform: translate3d(-12vmin, -14vmin, 0) scale(1) } }
+@keyframes drift-c { from { transform: translate3d(0,0,0) scale(1) } to { transform: translate3d(-16vmin, 12vmin, 0) scale(1.2) } }
+
+/* Dark theme: the same fields, dimmer, so they read as a glow rather than a wash. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .aura { opacity: calc(.16 + var(--glow, 0) * .44); }
+}
+:root[data-theme="dark"] .aura { opacity: calc(.16 + var(--glow, 0) * .44); }
+
+/* The day just closed. One short bloom, then back to the resting state. */
+body.celebrate .aura { animation: bloom 2.4s cubic-bezier(.22, 1, .36, 1); }
+@keyframes bloom {
+  0%   { opacity: calc(.30 + var(--glow, 0) * .70) }
+  28%  { opacity: 1 }
+  100% { opacity: calc(.30 + var(--glow, 0) * .70) }
+}
+body.celebrate .ring { animation: ring-pulse 2.2s cubic-bezier(.22, 1, .36, 1); }
+@keyframes ring-pulse {
+  0%   { transform: scale(1) }
+  26%  { transform: scale(1.055) }
+  60%  { transform: scale(.995) }
+  100% { transform: scale(1) }
+}
+
+/* Content sits above the aura. */
+.app, .setup { position: relative; z-index: 1; }
+
+/* The ring sweeps up from empty when the screen is opened. */
+.ring .fill { transition: stroke-dashoffset .95s cubic-bezier(.22, 1, .36, 1); }
+
+/* A tick draws itself in rather than appearing. */
+.row[data-done="true"] .row-check svg path { animation: draw-tick .42s ease-out both; }
+@keyframes draw-tick {
+  from { stroke-dasharray: 14; stroke-dashoffset: 14 }
+  to   { stroke-dasharray: 14; stroke-dashoffset: 0 }
+}
+.row[data-done="true"] .row-glyph { animation: pop .34s cubic-bezier(.34, 1.56, .64, 1); }
+@keyframes pop { 0% { transform: scale(.82) } 100% { transform: scale(1) } }
+
+@media (prefers-reduced-motion: reduce) {
+  .aura i { animation: none !important; }
+  body.celebrate .aura, body.celebrate .ring,
+  .row[data-done="true"] .row-check svg path,
+  .row[data-done="true"] .row-glyph { animation: none !important; }
+}
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }

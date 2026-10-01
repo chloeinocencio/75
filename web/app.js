@@ -486,6 +486,31 @@ const isMilestoneDay = (n) => tier().photoCadence === "daily" || n === 1 || n ==
 const photosForDay = (n) => photos.filter((p) => p.day === n && p.attempt === attemptNumber());
 const attemptNumber = () => state.attempt || 1;
 
+/* ----------------------------------------------------------- liveliness */
+
+let lastFraction = null;
+let sweepRing = true;   // animate the ring up from empty when the screen is opened
+
+/** Drives the background: --glow is today's completion, 0 to 1. */
+function setGlow(fraction) {
+  document.documentElement.style.setProperty("--glow", fraction.toFixed(3));
+
+  // Bloom once, on the transition into a completed day — not on every re-render.
+  if (lastFraction !== null && lastFraction < 1 && fraction >= 1) {
+    document.body.classList.add("celebrate");
+    setTimeout(() => document.body.classList.remove("celebrate"), 2500);
+    toast(dayClosedMessage());
+  }
+  lastFraction = fraction;
+}
+
+function dayClosedMessage() {
+  const left = state.totalDays - currentDay();
+  if (left === 0) return "Day 75 complete. That's the whole thing.";
+  if (left === 1) return "Day closed. One to go.";
+  return `Day ${currentDay()} closed. ${left} to go.`;
+}
+
 /* ------------------------------------------------------------------- views */
 
 const $ = (sel) => document.querySelector(sel);
@@ -498,6 +523,19 @@ function render() {
   const views = { today: viewToday, photos: viewPhotos, compare: viewCompare, friends: viewFriends };
   $("#screenTitle").textContent = TITLES[tab];
   screenEl.innerHTML = views[tab]();
+
+  if (tab === "today" && state.tier) {
+    const f = completionFraction(dayRecord(currentDay()));
+    if (sweepRing) {
+      const fill = screenEl.querySelector(".ring .fill");
+      const C = 2 * Math.PI * 68;
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (fill) fill.setAttribute("stroke-dashoffset", (C * (1 - f)).toFixed(1));
+      }));
+      sweepRing = false;
+    }
+    setGlow(f);
+  }
   document.querySelectorAll(".tab").forEach((b) =>
     b.setAttribute("aria-selected", String(b.dataset.tab === tab)));
   if (tab === "compare") wireCompare();
@@ -513,12 +551,15 @@ function viewToday() {
   const C = 2 * Math.PI * 68;
   const done = completedDays();
 
+  // Rendered empty when the screen is opened, then filled on the next frame so the
+  // stroke animates up to today's figure instead of simply appearing at it.
+  const offset = sweepRing ? C : C * (1 - f);
   let h = `
     <div class="ring-wrap"><div class="ring">
       <svg viewBox="0 0 156 156">
         <circle class="track" cx="78" cy="78" r="68"/>
         <circle class="fill" cx="78" cy="78" r="68" stroke-linecap="round"
-          stroke-dasharray="${C.toFixed(1)}" stroke-dashoffset="${(C * (1 - f)).toFixed(1)}"/>
+          stroke-dasharray="${C.toFixed(1)}" stroke-dashoffset="${offset.toFixed(1)}"/>
       </svg>
       <div class="ring-mid">
         <div class="ring-day">${day}</div>
@@ -1106,6 +1147,7 @@ function boot() {
 
 document.querySelectorAll(".tab").forEach((b) =>
   b.addEventListener("click", () => {
+    if (b.dataset.tab === "today" && tab !== "today") sweepRing = true;
     tab = b.dataset.tab;
     render();
     window.scrollTo(0, 0);   // the page scrolls, not the screen element
@@ -1292,7 +1334,12 @@ function checkDayChange() {
   advanceDay();
   if (currentDay() !== before) render();
 }
-document.addEventListener("visibilitychange", () => { if (!document.hidden) checkDayChange(); });
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) return;
+  sweepRing = true;          // coming back to the app replays the sweep
+  checkDayChange();
+  if (tab === "today") render();
+});
 window.addEventListener("focus", checkDayChange);
 setInterval(checkDayChange, 60000);
 
