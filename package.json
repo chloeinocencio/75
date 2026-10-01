@@ -1,0 +1,13 @@
+{
+  "name": "seventyfive-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "75 — challenge tracker with progress photos",
+  "main": "web/server.js",
+  "scripts": {
+    "start": "node web/server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

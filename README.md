@@ -1,12 +1,38 @@
 # 75
 
-Native SwiftUI app for tracking the **75 Soft**, **75 Medium**, and **75 Hard**
-challenges, with progress photos as a first-class feature.
+Track the **75 Soft**, **75 Medium** or **75 Hard** challenge, with progress
+photos as a first-class feature.
 
-## The three tiers, as implemented
+Two builds share one set of rules:
+
+- **`web/`** — the web app. Runs anywhere, deploys to Replit, stores everything
+  on the device. This is what ships today.
+- **`SeventyFive/`** — the native iOS app (SwiftUI). Builds on a Mac with Xcode
+  and ships through TestFlight / the App Store.
+
+## Running the web app
+
+```sh
+npm start          # http://localhost:3000
+```
+
+No dependencies and no build step — plain HTML, CSS and JavaScript served by a
+small Node file server.
+
+### Deploying on Replit
+
+Import this repository into Replit. The committed `.replit` sets Node 20 and
+`npm start`, so **Run** works immediately and **Deploy** (autoscale) publishes
+it. Port 3000 is mapped to 80.
+
+The camera needs a secure context: it works on Replit's HTTPS URL and on
+`localhost`, and falls back to picking a photo from the device anywhere it
+isn't available.
+
+## The three tiers
 
 The tiers differ in more than difficulty — they have genuinely different rules,
-different units, and different failure semantics. The app models all three
+different units, and different failure semantics. Both builds model all three
 rather than treating them as one checklist with a strictness dial.
 
 | | 75 Soft | 75 Medium | 75 Hard |
@@ -47,36 +73,56 @@ consensus ([Cleveland Clinic](https://health.clevelandclinic.org/75-soft-challen
 [Marathon Handbook](https://marathonhandbook.com/75-medium-challenge/)). Since
 nobody owns them, per-user goal overrides are a reasonable future addition.
 
-## Progress photo features
+## Progress photos
 
-- **Ghost overlay** — your last photo of the same pose is superimposed at
-  adjustable opacity so you can match framing day to day.
+- **Ghost overlay** — your last photo of the same pose is superimposed on the
+  viewfinder at adjustable opacity, so you can match framing day to day.
 - **Align mode** — switches to a difference blend; the outline fades toward
   black as your pose matches, which is faster than judging opacity by eye.
 - **Poses** — Front / Side / Back tracked separately, each with its own
   overlay history and timeline.
-- **Timeline** — grid of every photo per pose, tap into a swipeable viewer.
-- **Before/After compare** — pick any two days, drag a divider to reveal one
-  over the other, share a flattened composite via the system share sheet.
-- Photos are stored as JPEGs in the app's private Application Support
-  directory — not the Photos library, not iCloud. SwiftData holds filenames,
-  never image blobs.
+- **Timeline** — every photo per pose, tap through to a full-screen viewer.
+- **Before / After** — pick any two days and drag a divider between them. The
+  web build writes a side-by-side image to your downloads; iOS uses the share
+  sheet.
+- Photos never leave the device on their own. The web build keeps them in
+  IndexedDB; iOS writes JPEGs to the app's private Application Support
+  directory — not the photo library, not iCloud.
 
-## What's a stub, on purpose
+## Where your data lives
 
-Friends are stored **only on this device**. There's no backend, so adding a
-friend doesn't notify or verify them, and the "Share My Progress" toggle
-doesn't transmit anything yet.
+Everything is stored on the device and nowhere else. There is no account, no
+server, and no analytics.
 
-Shipping real sharing needs:
+The web build uses `localStorage` for your challenge and `IndexedDB` for
+photos, which means clearing the browser's site data erases it, and it doesn't
+follow you to another browser or device. Settings → Start over erases it
+deliberately.
+
+**Friends are device-local too.** You can add people by phone number and keep
+the list, but nothing is transmitted: connecting two phones needs a server this
+build doesn't have. The in-app copy says so plainly rather than implying an
+invite was sent.
+
+Adding real sharing would need:
 - Phone verification (Firebase Phone Auth or Twilio Verify)
 - A datastore for friend graphs and daily progress snapshots (Firebase or
-  Supabase are the fastest paths for a solo iOS dev)
-- Push notifications for invites and nudges (APNs)
+  Supabase are the fastest paths)
+- Push notifications for invites and nudges
 
-Everything else works offline and on-device.
+## Counting days
 
-## Opening the project
+A day boundary is a civil date — year, month, day — resolved in the device's
+current time zone, never an absolute instant. That keeps the count correct
+across a daylight-saving change and across travel: an instant that was midnight
+where you started is not midnight anywhere else, and comparing against it
+silently drops or repeats a day. The count is also clamped so it can never run
+backwards, since crossing the date line westward repeats a local date.
+
+Both builds re-check the day when they come back to the foreground, so leaving
+the app open past midnight rolls over correctly.
+
+## Building the iOS app
 
 Swift source plus an [XcodeGen](https://github.com/yonaskolb/XcodeGen)
 manifest, rather than a checked-in `.xcodeproj` (those don't diff or merge
@@ -94,6 +140,13 @@ capture screen shows its permission-denied state there.
 ## Layout
 
 ```
+.replit                Replit run + deploy config
+package.json           npm start -> web/server.js
+web/
+  index.html           App shell
+  app.css              Theme tokens, light and dark
+  app.js               Rules, storage, screens, camera
+  server.js            Static file server
 project.yml            XcodeGen manifest (target, Info.plist, permissions)
 SeventyFive/
   App/                 Entry point + root tab navigation
