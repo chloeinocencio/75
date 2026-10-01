@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import PhotosUI
 
 struct ProgressPhotoCaptureView: View {
     @Environment(\.dismiss) private var dismiss
@@ -16,6 +17,8 @@ struct ProgressPhotoCaptureView: View {
     @State private var capturedImage: UIImage?
     @State private var isSaving = false
     @State private var saveError: String?
+    @State private var showLibraryPicker = false
+    @State private var pickedItem: PhotosPickerItem?
 
     private var ghostImage: UIImage? {
         guard let photo = challenge.lastPhoto(before: dailyEntry.dayNumber, pose: pose) else { return nil }
@@ -68,6 +71,21 @@ struct ProgressPhotoCaptureView: View {
                 onRetake: { capturedImage = nil },
                 onUse: { saveCapturedPhoto(wrapped.image) }
             )
+        }
+        .photosPicker(isPresented: $showLibraryPicker, selection: $pickedItem, matching: .images)
+        .onChange(of: pickedItem) { _, item in
+            guard let item else { return }
+            Task {
+                let data = try? await item.loadTransferable(type: Data.self)
+                await MainActor.run {
+                    if let data, let image = UIImage(data: data) {
+                        capturedImage = image
+                    } else {
+                        saveError = "That image couldn't be read."
+                    }
+                    pickedItem = nil
+                }
+            }
         }
         .alert("Couldn't save photo", isPresented: .constant(saveError != nil)) {
             Button("OK") { saveError = nil }
@@ -161,7 +179,19 @@ struct ProgressPhotoCaptureView: View {
 
     private var bottomBar: some View {
         HStack {
+            Button {
+                showLibraryPicker = true
+            } label: {
+                Image(systemName: "photo.on.rectangle")
+                    .font(.title3)
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .background(.black.opacity(0.4), in: Circle())
+            }
+            .accessibilityLabel("Choose a photo")
+
             Spacer()
+
             Button {
                 camera.capturePhoto { image in
                     guard let image else { return }
@@ -173,26 +203,64 @@ struct ProgressPhotoCaptureView: View {
                     .frame(width: 76, height: 76)
                     .overlay(Circle().fill(.white).frame(width: 64, height: 64).padding(6))
             }
+            .accessibilityLabel("Take photo")
+
             Spacer()
+
+            // Balances the library button so the shutter stays centred.
+            Color.clear.frame(width: 44, height: 44)
         }
         .padding(.top, 16)
     }
 
+    @ViewBuilder
     private var cameraPermissionPrompt: some View {
+        switch camera.permission {
+        case .undetermined:
+            // iOS is presenting its own alert over this view. Anything written here would
+            // read as if the request had already been refused, so stay quiet.
+            Color.clear
+
+        case .denied:
+            permissionMessage(
+                icon: "camera.fill",
+                text: "75 needs camera access to take your progress photo.",
+                action: ("Open Settings", {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                })
+            )
+
+        case .restricted:
+            // Screen Time or an MDM profile blocks the camera; Settings won't help the user.
+            permissionMessage(
+                icon: "lock.fill",
+                text: "Camera access is restricted on this device, so a photo can't be taken here.",
+                action: nil
+            )
+
+        case .authorized:
+            EmptyView()
+        }
+    }
+
+    private func permissionMessage(icon: String, text: String, action: (String, () -> Void)?) -> some View {
         VStack(spacing: 16) {
-            Image(systemName: "camera.fill")
+            Image(systemName: icon)
                 .font(.system(size: 44))
                 .foregroundStyle(.white.opacity(0.8))
-            Text("Camera access is needed to take your progress photo.")
+            Text(text)
                 .foregroundStyle(.white)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
-            Button("Open Settings") {
-                if let url = URL(string: UIApplication.openSettingsURLString) {
-                    UIApplication.shared.open(url)
-                }
+            if let action {
+                Button(action.0, action: action.1)
+                    .buttonStyle(.borderedProminent)
             }
-            .buttonStyle(.borderedProminent)
+            Button("Choose a photo instead") { showLibraryPicker = true }
+                .buttonStyle(.bordered)
+                .tint(.white)
         }
     }
 

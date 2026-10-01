@@ -1,27 +1,51 @@
 import AVFoundation
 import UIKit
 
+/// Camera authorisation, kept distinct from a simple yes/no.
+///
+/// `undetermined` matters: while the system alert is on screen the app is not authorised,
+/// but it has not been refused either — telling the user to open Settings at that moment
+/// would be wrong, and it would be sitting behind Apple's own alert.
+enum CameraPermission {
+    case undetermined
+    case authorized
+    case denied
+    case restricted
+}
+
 final class CameraController: NSObject, ObservableObject {
     let session = AVCaptureSession()
     private let photoOutput = AVCapturePhotoOutput()
     private(set) var currentPosition: AVCaptureDevice.Position = .front
-    @Published var isAuthorized = false
+    @Published var permission: CameraPermission = .undetermined
     private var captureCompletion: ((UIImage?) -> Void)?
 
+    var isAuthorized: Bool { permission == .authorized }
+
+    /// Called when the capture screen appears, so the system alert arrives in context —
+    /// right after the user asked to take a photo, which is what Apple's guidance wants.
     func requestAccessAndConfigure() {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
-            isAuthorized = true
+            permission = .authorized
             configure()
         case .notDetermined:
+            permission = .undetermined
+            // This is the standard iOS alert: "\"75\" Would Like to Access the Camera",
+            // with NSCameraUsageDescription as its body. It is shown once per install —
+            // after a refusal iOS answers immediately without presenting it again.
             AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
                 DispatchQueue.main.async {
-                    self?.isAuthorized = granted
+                    self?.permission = granted ? .authorized : .denied
                     if granted { self?.configure() }
                 }
             }
-        default:
-            isAuthorized = false
+        case .restricted:
+            permission = .restricted
+        case .denied:
+            permission = .denied
+        @unknown default:
+            permission = .denied
         }
     }
 
