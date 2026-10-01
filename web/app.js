@@ -190,6 +190,194 @@ async function refreshPhotos() {
 
 const photoURL = (p) => urls.get(p.id) || "";
 
+/* ------------------------------------------------------------- backup file */
+
+/* Backups are a store-only ZIP rather than JSON with base64 photos. A full challenge can
+   hold 75+ JPEGs; base64 inflates them by a third and would mean building one enormous
+   string, which is exactly what fails on a phone at day 70 when the backup matters most.
+   Stored entries keep the JPEGs byte-for-byte, and the file opens in any zip tool. */
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[i] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+function dosStamp(d) {
+  return {
+    time: ((d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1)) & 0xFFFF,
+    date: (((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate()) & 0xFFFF
+  };
+}
+
+/** entries: [{ name, data: Uint8Array }] -> Blob */
+function zipStore(entries) {
+  const enc = new TextEncoder();
+  const { time, date } = dosStamp(new Date());
+  const parts = [];
+  const central = [];
+  let offset = 0;
+
+  for (const e of entries) {
+    const name = enc.encode(e.name);
+    const crc = crc32(e.data);
+    const h = new DataView(new ArrayBuffer(30));
+    h.setUint32(0, 0x04034b50, true);
+    h.setUint16(4, 20, true);
+    h.setUint16(6, 0x0800, true);          // UTF-8 names
+    h.setUint16(8, 0, true);               // stored, no compression
+    h.setUint16(10, time, true);
+    h.setUint16(12, date, true);
+    h.setUint32(14, crc, true);
+    h.setUint32(18, e.data.length, true);
+    h.setUint32(22, e.data.length, true);
+    h.setUint16(26, name.length, true);
+    h.setUint16(28, 0, true);
+    parts.push(new Uint8Array(h.buffer), name, e.data);
+    central.push({ name, crc, size: e.data.length, offset });
+    offset += 30 + name.length + e.data.length;
+  }
+
+  const cdStart = offset;
+  for (const c of central) {
+    const h = new DataView(new ArrayBuffer(46));
+    h.setUint32(0, 0x02014b50, true);
+    h.setUint16(4, 20, true);
+    h.setUint16(6, 20, true);
+    h.setUint16(8, 0x0800, true);
+    h.setUint16(10, 0, true);
+    h.setUint16(12, time, true);
+    h.setUint16(14, date, true);
+    h.setUint32(16, c.crc, true);
+    h.setUint32(20, c.size, true);
+    h.setUint32(24, c.size, true);
+    h.setUint16(28, c.name.length, true);
+    h.setUint32(42, c.offset, true);
+    parts.push(new Uint8Array(h.buffer), c.name);
+    offset += 46 + c.name.length;
+  }
+
+  const eocd = new DataView(new ArrayBuffer(22));
+  eocd.setUint32(0, 0x06054b50, true);
+  eocd.setUint16(8, central.length, true);
+  eocd.setUint16(10, central.length, true);
+  eocd.setUint32(12, offset - cdStart, true);
+  eocd.setUint32(16, cdStart, true);
+  parts.push(new Uint8Array(eocd.buffer));
+
+  return new Blob(parts, { type: "application/zip" });
+}
+
+function zipRead(buffer) {
+  const dv = new DataView(buffer);
+  const bytes = new Uint8Array(buffer);
+  let eocd = -1;
+  const floor = Math.max(0, buffer.byteLength - 22 - 65535);
+  for (let i = buffer.byteLength - 22; i >= floor; i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error("That file isn't a 75 backup.");
+
+  const count = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);
+  const dec = new TextDecoder();
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) throw new Error("That backup file is damaged.");
+    if (dv.getUint16(p + 10, true) !== 0) throw new Error("That backup was written by a different tool.");
+    const nameLen = dv.getUint16(p + 28, true);
+    const extraLen = dv.getUint16(p + 30, true);
+    const cmtLen = dv.getUint16(p + 32, true);
+    const size = dv.getUint32(p + 24, true);
+    const crc = dv.getUint32(p + 16, true);
+    const lho = dv.getUint32(p + 42, true);
+    const name = dec.decode(bytes.subarray(p + 46, p + 46 + nameLen));
+    const start = lho + 30 + dv.getUint16(lho + 26, true) + dv.getUint16(lho + 28, true);
+    const data = bytes.subarray(start, start + size);
+    if (crc32(data) !== crc) throw new Error("That backup is damaged, so nothing was changed.");
+    out.push({ name, data });
+    p += 46 + nameLen + extraLen + cmtLen;
+  }
+  return out;
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+async function exportBackup() {
+  toast("Preparing backup\u2026");
+  const manifest = {
+    app: "75", format: 1,
+    exported: new Date().toISOString(),
+    state, photos: []
+  };
+  const entries = [];
+  for (const p of photos) {
+    const file = `photos/day${String(p.day).padStart(2, "0")}-a${p.attempt}-${p.pose.toLowerCase()}-${p.id}.jpg`;
+    entries.push({ name: file, data: new Uint8Array(await p.blob.arrayBuffer()) });
+    manifest.photos.push({ file, day: p.day, attempt: p.attempt, pose: p.pose, ts: p.ts });
+  }
+  entries.unshift({
+    name: "backup.json",
+    data: new TextEncoder().encode(JSON.stringify(manifest, null, 2))
+  });
+  const blob = zipStore(entries);
+  downloadBlob(blob, `75-backup-${new Date().toISOString().slice(0, 10)}.zip`);
+  const mb = (blob.size / 1048576).toFixed(1);
+  toast(`Backup saved \u2014 ${photos.length} ${photos.length === 1 ? "photo" : "photos"}, ${mb} MB.`);
+}
+
+async function importBackup(file) {
+  const entries = zipRead(await file.arrayBuffer());
+  const manifestEntry = entries.find((e) => e.name === "backup.json");
+  if (!manifestEntry) throw new Error("This doesn't look like a 75 backup.");
+  const manifest = JSON.parse(new TextDecoder().decode(manifestEntry.data));
+  if (manifest.app !== "75" || !manifest.state) throw new Error("This doesn't look like a 75 backup.");
+
+  // Everything is validated before anything is deleted, so a bad file can't destroy
+  // the data that is already here.
+  const byName = new Map(entries.map((e) => [e.name, e.data]));
+  for (const p of photos) { try { await deletePhoto(p.id); } catch (_) {} }
+  urls.forEach((u) => URL.revokeObjectURL(u));
+  urls.clear();
+  photos = [];
+
+  let restored = 0;
+  for (const rec of (manifest.photos || [])) {
+    const data = byName.get(rec.file);
+    if (!data) continue;
+    await putPhoto({
+      day: rec.day, attempt: rec.attempt, pose: rec.pose, ts: rec.ts,
+      blob: new Blob([data], { type: "image/jpeg" })
+    });
+    restored++;
+  }
+
+  state = Object.assign(blankState(), manifest.state);
+  save();
+  await refreshPhotos();
+  boot();
+  toast(`Restored \u2014 ${restored} ${restored === 1 ? "photo" : "photos"}.`);
+}
+
 /* -------------------------------------------------------------- day math */
 
 /** Today as a civil date in the device's current zone. */
@@ -542,14 +730,7 @@ async function exportComparison() {
 
   canvas.toBlob((blob) => {
     if (!blob) return toast("Couldn't build the image.");
-    const url = URL.createObjectURL(blob);
-    const a2 = document.createElement("a");
-    a2.href = url;
-    a2.download = `75-day${before.day}-vs-day${after.day}.jpg`;
-    document.body.appendChild(a2);
-    a2.click();
-    a2.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    downloadBlob(blob, `75-day${before.day}-vs-day${after.day}.jpg`);
     toast("Comparison saved.");
   }, "image/jpeg", 0.9);
 }
@@ -830,8 +1011,10 @@ function settingsDialog() {
              started ${state.start ? state.start.slice().reverse().join("/") : "—"}.</p>
            <p>${photos.length} ${photos.length === 1 ? "photo" : "photos"} stored on this device.</p>
            <p>Everything here is saved in this browser. Clearing site data erases it, and it
-              doesn't follow you to another device.</p>`,
+              doesn't follow you to another device — so take a backup now and then.</p>`,
     actions: [
+      { label: "Back up", style: "btn-primary", onClick: () => { exportBackup().catch(() => toast("Couldn't build the backup.")); } },
+      { label: "Restore", onClick: () => { $("#restorePick").click(); } },
       { label: "Close" },
       {
         label: "Start over", style: "btn-warn",
@@ -1068,6 +1251,27 @@ $("#retake").addEventListener("click", () => {
   $("#review").hidden = true;
 });
 $("#usePhoto").addEventListener("click", () => camera.save());
+
+$("#restorePick").addEventListener("change", (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  modal({
+    title: "Restore this backup?",
+    body: `<p><b>${escapeHTML(file.name)}</b></p>
+           <p>This replaces the challenge, photos and friends currently on this device.
+              It can't be undone, so back up first if there's anything here worth keeping.</p>`,
+    actions: [
+      { label: "Cancel" },
+      {
+        label: "Restore", style: "btn-warn",
+        onClick: () => {
+          importBackup(file).catch((err) => toast(err.message || "That backup couldn't be read."));
+        }
+      }
+    ]
+  });
+});
 
 $("#modal").addEventListener("click", (e) => {
   if (e.target === $("#modal")) $("#modal").hidden = true;
