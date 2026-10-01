@@ -605,6 +605,30 @@ const escapeHTML = (s) => String(s).replace(/[&<>"']/g, (c) =>
 
 /* ------------------------------------------------------------- the camera */
 
+
+/**
+ * Why the camera didn't open. getUserMedia fails for several unrelated reasons and they
+ * need different fixes, so say which one it was rather than "not available".
+ *
+ * The browser only exposes navigator.mediaDevices in a secure context, so an http:// origin
+ * fails before any permission prompt — the single most likely surprise when deploying.
+ */
+function cameraFailureReason(err) {
+  const name = err && err.name;
+  if (name === "NotAllowedError") {
+    // Also what an iframe without a camera allow-attribute reports.
+    return window.self !== window.top
+      ? "This page is embedded, and the camera is blocked here."
+      : "Camera access was declined. Re-allow it in your browser's site settings.";
+  }
+  if (name === "NotFoundError" || name === "DevicesNotFoundError") return "No camera found on this device.";
+  if (name === "NotReadableError" || name === "TrackStartError") return "The camera is already in use by another app.";
+  if (name === "OverconstrainedError") return "This camera doesn't support the requested format.";
+  if (!window.isSecureContext) return "The camera needs a secure connection. Open this page over https.";
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return "This browser can't open the camera.";
+  return "The camera couldn't be opened.";
+}
+
 const camera = {
   stream: null,
   facing: "user",
@@ -644,10 +668,7 @@ const camera = {
       unavailable.hidden = false;
       $("#shutter").hidden = true;
       $("#camFlip").hidden = true;
-      $("#camUnavailableMsg").textContent =
-        err && err.name === "NotAllowedError"
-          ? "Camera access was declined."
-          : "The camera isn't available here.";
+      $("#camUnavailableMsg").textContent = cameraFailureReason(err);
     }
   },
 
