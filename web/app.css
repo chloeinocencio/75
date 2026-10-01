@@ -1,29 +1,34 @@
-/* 75 — Helvetica. Monochrome with a chartreuse accent.
+/* 75 — Helvetica. Warm cream, soft chartreuse, near-black ink.
  *
- * Palette: #000000 #656565 #D5D5D5 #C0FF6B #A4FF00
+ * Light palette sampled from the reference: cream #F5F0EA, white and warm-beige
+ * #E5DED6 cards, chartreuse #DAE644, ink #0A0A0C. The dark theme is derived at the
+ * cream's own warm hue so the two feel like one family rather than two designs.
  *
- * Both greens sit very high on the luminance scale (#A4FF00 is 1.2:1 against white but
- * 16.9:1 against black), so the accent is a FILL carrying black ink, never coloured text
- * on a light surface. --accent-text exists for the cases that need an accent-coloured
- * glyph: black in the light theme, chartreuse in the dark one, where it reads at 15:1.
+ * The chartreuse is a FILL carrying ink, never coloured text on a light surface: it is
+ * 14.5:1 under black but only 1.2:1 against the cream behind it. That last figure is also
+ * why accent fills take --accent-edge in the light theme — without it a lime button has
+ * no discernible outline against the page.
  */
 
 :root {
-  --bg: #ededed;
+  --bg: #f5f0ea;
   --surface: #ffffff;
-  --surface-2: #f6f6f6;
-  --fg: #000000;
-  --fg-dim: #545454;
-  --fg-faint: #6e6e6e;
-  --line: #d5d5d5;
-  --accent: #a4ff00;
-  --accent-ink: #000000;
-  --accent-text: #000000;
-  --accent-soft: #c0ff6b;
+  --surface-2: #e5ded6;
+  --fg: #0a0a0c;
+  --fg-dim: #5e584f;
+  --fg-faint: #7e776c;
+  --line: #e3dcd2;
+  --accent: #dae644;
+  --accent-ink: #0a0a0c;
+  --accent-text: #0a0a0c;
+  --accent-soft: #edf3a8;
+  --accent-edge: rgba(10, 10, 12, .16);
   /* No red in this palette: an alert inverts against the page instead of changing hue. */
-  --warn-bg: #000000;
-  --warn-fg: #ffffff;
-  --shadow: 0 1px 2px rgba(0, 0, 0, .07), 0 10px 28px rgba(0, 0, 0, .10);
+  --warn-bg: #0a0a0c;
+  --warn-fg: #f5f0ea;
+  --radius-card: 20px;
+  --radius-ctl: 14px;
+  --shadow: 0 1px 2px rgba(60, 50, 35, .05), 0 10px 30px rgba(60, 50, 35, .09);
   --font: "Helvetica Neue", Helvetica, Arial, sans-serif;
   --safe-t: env(safe-area-inset-top, 0px);
   --safe-b: env(safe-area-inset-bottom, 0px);
@@ -32,37 +37,39 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #000000;
-    --surface: #121212;
-    --surface-2: #1c1c1c;
-    --fg: #d5d5d5;
-    --fg-dim: #959595;
-    --fg-faint: #6e6e6e;
-    --line: #2e2e2e;
-    --accent: #a4ff00;
-    --accent-ink: #000000;
-    --accent-text: #a4ff00;
-    --accent-soft: rgba(164, 255, 0, .16);
-    --warn-bg: #d5d5d5;
-    --warn-fg: #000000;
+    --bg: #14130e;
+    --surface: #1e1c16;
+    --surface-2: #2a2720;
+    --fg: #f0ebe3;
+    --fg-dim: #a49c8f;
+    --fg-faint: #7a7265;
+    --line: #333028;
+    --accent: #dae644;
+    --accent-ink: #14130e;
+    --accent-text: #dae644;
+    --accent-soft: rgba(218, 230, 68, .15);
+    --accent-edge: transparent;
+    --warn-bg: #f0ebe3;
+    --warn-fg: #14130e;
     --shadow: 0 1px 2px rgba(0, 0, 0, .6), 0 14px 36px rgba(0, 0, 0, .5);
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #000000;
-  --surface: #121212;
-  --surface-2: #1c1c1c;
-  --fg: #d5d5d5;
-  --fg-dim: #959595;
-  --fg-faint: #6e6e6e;
-  --line: #2e2e2e;
-  --accent: #a4ff00;
-  --accent-ink: #000000;
-  --accent-text: #a4ff00;
-  --accent-soft: rgba(164, 255, 0, .16);
-  --warn-bg: #d5d5d5;
-  --warn-fg: #000000;
+  --bg: #14130e;
+  --surface: #1e1c16;
+  --surface-2: #2a2720;
+  --fg: #f0ebe3;
+  --fg-dim: #a49c8f;
+  --fg-faint: #7a7265;
+  --line: #333028;
+  --accent: #dae644;
+  --accent-ink: #14130e;
+  --accent-text: #dae644;
+  --accent-soft: rgba(218, 230, 68, .15);
+  --accent-edge: transparent;
+  --warn-bg: #f0ebe3;
+  --warn-fg: #14130e;
   --shadow: 0 1px 2px rgba(0, 0, 0, .6), 0 14px 36px rgba(0, 0, 0, .5);
   color-scheme: dark;
 }
@@ -93,10 +100,11 @@ button { cursor: pointer; }
 .tier-cards { display: flex; flex-direction: column; gap: 11px; }
 .tier-card {
   text-align: left; background: var(--surface); border: 1px solid var(--line);
-  border-radius: 15px; padding: 15px; display: flex; flex-direction: column; gap: 7px;
+  border-radius: var(--radius-card); padding: 15px; display: flex; flex-direction: column; gap: 7px;
   transition: border-color .15s, background .15s;
 }
 .tier-card[aria-pressed="true"] { border-color: var(--accent); border-width: 2px; padding: 14px; background: var(--accent-soft); }
+.tier-card[aria-pressed="true"] .tier-tag { color: var(--fg-dim); }
 .tier-card-head { display: flex; align-items: center; gap: 9px; }
 .tier-card-head h3 { font-size: 17px; flex: 1 1 auto; }
 .tier-card-head .mark { flex: none; width: 20px; height: 20px; color: var(--line); }
@@ -116,15 +124,15 @@ button { cursor: pointer; }
 .field-row { display: flex; gap: 8px; }
 .field-row input, .field-row select {
   flex: 1 1 auto; min-width: 0; background: var(--surface);
-  border: 1px solid var(--line); border-radius: 11px; padding: 11px 12px;
+  border: 1px solid var(--line); border-radius: var(--radius-ctl); padding: 11px 12px;
 }
 .field-row select { flex: 0 0 84px; }
 .field-row input:focus-visible, .field-row select:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
 .field-note { font-size: 12.5px; color: var(--fg-dim); }
 
 /* ---------------- buttons ---------------- */
-.btn { border: 1px solid transparent; border-radius: 11px; padding: 10px 15px; font-weight: 700; font-size: 14.5px; }
-.btn-primary { background: var(--accent); color: var(--accent-ink); }
+.btn { border: 1px solid transparent; border-radius: var(--radius-ctl); padding: 10px 15px; font-weight: 700; font-size: 14.5px; }
+.btn-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent-edge); }
 .btn-primary[disabled] { opacity: .45; }
 .btn-ghost { background: transparent; border-color: var(--line); color: var(--fg); }
 .btn-ghost-light { background: rgba(255,255,255,.14); border-color: rgba(255,255,255,.4); color: #fff; }
@@ -184,7 +192,7 @@ button { cursor: pointer; }
 .attempt-line { text-align: center; font-size: 11.5px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-dim); margin-bottom: 12px; }
 
 /* ---------------- cards, rows ---------------- */
-.card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 4px 15px; margin-bottom: 13px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-card); padding: 4px 15px; margin-bottom: 13px; }
 .card-pad { padding: 15px; }
 .row {
   display: flex; align-items: center; gap: 13px; width: 100%;
@@ -223,12 +231,15 @@ button { cursor: pointer; }
 .bar > i { display: block; height: 100%; background: var(--accent); border-radius: 99px; transition: width .25s; }
 
 /* ---------------- notices ---------------- */
-.notice { border-radius: 16px; padding: 15px; margin-bottom: 13px; background: var(--warn-bg); color: var(--warn-fg); }
+.notice { border-radius: var(--radius-card); padding: 15px; margin-bottom: 13px; background: var(--warn-bg); color: var(--warn-fg); }
 .notice h4 { color: var(--warn-fg); font-size: 14.5px; margin-bottom: 5px; }
 .notice .btn-warn { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .notice p { font-size: 13px; color: var(--warn-fg); opacity: .74; margin-bottom: 11px; }
-.flag { border-radius: 16px; padding: 15px; margin-bottom: 13px; background: var(--surface); border: 1px solid var(--line); }
-.flag.hot { background: var(--accent-soft); border-color: var(--accent); }
+.flag { border-radius: var(--radius-card); padding: 15px; margin-bottom: 13px; background: var(--surface); border: 1px solid var(--line); }
+.flag.hot { background: var(--accent); border-color: var(--accent-edge); color: var(--accent-ink); }
+.flag.hot p { color: var(--accent-ink); opacity: .72; }
+.flag.hot h4 svg { color: var(--accent-ink); }
+.flag.hot .btn { background: var(--fg); color: var(--bg); border-color: transparent; }
 .flag h4 { font-size: 14.5px; margin-bottom: 5px; display: flex; align-items: center; gap: 8px; }
 .flag h4 svg { width: 17px; height: 17px; flex: none; color: var(--accent-text); }
 .flag p { font-size: 13px; color: var(--fg-dim); margin-bottom: 11px; }
@@ -243,7 +254,7 @@ button { cursor: pointer; }
 .fine { font-size: 12.5px; color: var(--fg-dim); margin-top: 9px; }
 
 /* ---------------- segmented ---------------- */
-.seg { display: flex; gap: 2px; padding: 3px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 11px; margin-bottom: 14px; }
+.seg { display: flex; gap: 2px; padding: 3px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-ctl); margin-bottom: 14px; }
 .seg button { flex: 1 1 0; min-width: 0; border: 0; background: none; color: var(--fg-dim); font-size: 13.5px; padding: 7px 4px; border-radius: 8px; }
 .seg button[aria-pressed="true"] { background: var(--surface); color: var(--fg); font-weight: 700; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
 .seg-dark { background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.2); }
@@ -252,10 +263,10 @@ button { cursor: pointer; }
 
 /* ---------------- photos ---------------- */
 .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
-.shot { position: relative; aspect-ratio: 3/4; border: 0; padding: 0; border-radius: 10px; overflow: hidden; background: var(--surface-2); display: block; }
+.shot { position: relative; aspect-ratio: 3/4; border: 0; padding: 0; border-radius: 14px; overflow: hidden; background: var(--surface-2); display: block; }
 .shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .shot b { position: absolute; left: 6px; bottom: 6px; font-size: 10px; font-weight: 700; letter-spacing: .04em; background: rgba(8,12,14,.66); color: #fff; padding: 2px 6px; border-radius: 5px; }
-.shot.is-milestone::after { content: ""; position: absolute; inset: 0; border: 2px solid var(--accent); border-radius: 10px; }
+.shot.is-milestone::after { content: ""; position: absolute; inset: 0; border: 3px solid var(--accent); border-radius: 14px; }
 
 .empty { text-align: center; padding: 46px 12px; }
 .empty svg { width: 38px; height: 38px; color: var(--fg-faint); margin-bottom: 11px; }
@@ -271,12 +282,12 @@ button { cursor: pointer; }
 
 /* ---------------- compare ---------------- */
 .pickers { display: flex; align-items: stretch; gap: 9px; margin-bottom: 14px; }
-.picker { flex: 1 1 0; min-width: 0; text-align: left; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 9px 11px; }
+.picker { flex: 1 1 0; min-width: 0; text-align: left; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-ctl); padding: 9px 11px; }
 .picker span { display: block; font-size: 10px; font-weight: 500; letter-spacing: .07em; text-transform: uppercase; color: var(--fg-faint); }
 .picker b { font-size: 16px; font-variant-numeric: tabular-nums; }
 .pickers .arrow { flex: none; width: 18px; align-self: center; color: var(--fg-faint); }
 
-.compare { position: relative; aspect-ratio: 3/4; border-radius: 14px; overflow: hidden; border: 1px solid var(--line); touch-action: none; user-select: none; cursor: ew-resize; margin-bottom: 13px; }
+.compare { position: relative; aspect-ratio: 3/4; border-radius: var(--radius-card); overflow: hidden; border: 1px solid var(--line); touch-action: none; user-select: none; cursor: ew-resize; margin-bottom: 13px; }
 .compare img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .compare .before { clip-path: inset(0 calc(100% - var(--f, 50%)) 0 0); }
 .compare .divider { position: absolute; top: 0; bottom: 0; left: var(--f, 50%); width: 2px; background: #fff; transform: translateX(-1px); box-shadow: 0 0 6px rgba(0,0,0,.5); }
@@ -336,7 +347,7 @@ button { cursor: pointer; }
   padding: 10px 16px; border-radius: 99px; box-shadow: var(--shadow); max-width: calc(100vw - 32px);
 }
 .modal { position: fixed; inset: 0; z-index: 95; background: rgba(8,12,14,.55); display: grid; place-items: center; padding: 16px; }
-.modal-card { width: 100%; max-width: 400px; background: var(--surface); border-radius: 18px; padding: 20px; box-shadow: var(--shadow); max-height: 86vh; overflow-y: auto; }
+.modal-card { width: 100%; max-width: 400px; background: var(--surface); border-radius: calc(var(--radius-card) + 4px); padding: 20px; box-shadow: var(--shadow); max-height: 86vh; overflow-y: auto; }
 .modal-card h2 { font-size: 19px; margin-bottom: 9px; }
 .modal-card p { font-size: 13.5px; color: var(--fg-dim); margin-bottom: 11px; }
 .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; flex-wrap: wrap; }
