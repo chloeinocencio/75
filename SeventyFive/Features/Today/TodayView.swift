@@ -1,12 +1,25 @@
 import SwiftUI
 import SwiftData
+import Combine
 
 struct TodayView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     let challenge: Challenge
 
     @State private var showCamera = false
     @State private var showResetConfirm = false
+
+    /// Fires at local midnight, and on a time-zone or daylight-saving change — the three
+    /// ways "today" can become a different day while the app is sitting open. Delivered on
+    /// the main queue so the SwiftData writes below stay on the main actor.
+    private var timeChanges: AnyPublisher<Void, Never> {
+        NotificationCenter.default
+            .publisher(for: UIApplication.significantTimeChangeNotification)
+            .map { _ in () }
+            .receive(on: DispatchQueue.main)
+            .eraseToAnyPublisher()
+    }
 
     /// Today's record, or nil until `ensureTodayEntry()` has created it.
     ///
@@ -27,6 +40,15 @@ struct TodayView: View {
         try? modelContext.save()
     }
 
+    /// Catches up after midnight, a flight, or a daylight-saving change: records the day
+    /// reached and opens a record for it.
+    @MainActor
+    private func rollOverIfNeeded() {
+        challenge.advanceDayIfNeeded()
+        ensureTodayEntry()
+        try? modelContext.save()
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -37,7 +59,12 @@ struct TodayView: View {
                 }
             }
             .navigationTitle(challenge.mode.rawValue)
-            .task { ensureTodayEntry() }
+            .task { rollOverIfNeeded() }
+            .onReceive(timeChanges) { rollOverIfNeeded() }
+            .onChange(of: scenePhase) { _, phase in
+                // Covers the app being backgrounded overnight, where no notification arrives.
+                if phase == .active { rollOverIfNeeded() }
+            }
             .fullScreenCover(isPresented: $showCamera) {
                 if let entry = dailyEntry {
                     ProgressPhotoCaptureView(challenge: challenge, dailyEntry: entry)
