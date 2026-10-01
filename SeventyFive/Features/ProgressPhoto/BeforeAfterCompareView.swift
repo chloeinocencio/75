@@ -9,16 +9,27 @@ struct BeforeAfterCompareView: View {
     @State private var dividerFraction: CGFloat = 0.5
     @State private var shareImage: ShareableImage?
 
+    /// Every day that has a photo of the selected pose, across all attempts, oldest first.
+    /// Deduplicated by day number — after a 75 Hard restart the same day number can recur,
+    /// and `ForEach(id: \.self)` requires unique ids.
     private var daysWithPhoto: [Int] {
-        challenge.days
+        var seen = Set<Int>()
+        return challenge.days
             .filter { day in day.photos.contains { $0.pose == pose } }
+            .sorted { ($0.attemptNumber, $0.dayNumber) < ($1.attemptNumber, $1.dayNumber) }
             .map(\.dayNumber)
-            .sorted()
+            .filter { seen.insert($0).inserted }
     }
 
+    /// Resolved from `days` directly rather than `challenge.entry(forDay:)`, which is scoped
+    /// to the current attempt and would miss photos from an earlier 75 Hard run.
     private func image(forDay day: Int?) -> UIImage? {
-        guard let day, let entry = challenge.entry(forDay: day),
-              let photo = entry.photos.first(where: { $0.pose == pose }) else { return nil }
+        guard let day,
+              let photo = challenge.days
+                  .filter({ $0.dayNumber == day })
+                  .flatMap(\.photos)
+                  .first(where: { $0.pose == pose })
+        else { return nil }
         return PhotoStorageService.loadImage(fileName: photo.fileName)
     }
 

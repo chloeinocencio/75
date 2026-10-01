@@ -15,6 +15,7 @@ struct ProgressPhotoCaptureView: View {
     @State private var alignMode = false
     @State private var capturedImage: UIImage?
     @State private var isSaving = false
+    @State private var saveError: String?
 
     private var ghostImage: UIImage? {
         guard let photo = challenge.lastPhoto(before: dailyEntry.dayNumber, pose: pose) else { return nil }
@@ -46,8 +47,8 @@ struct ProgressPhotoCaptureView: View {
                 topBar
                 Spacer()
                 if camera.isAuthorized {
-                    if let ghostImage {
-                        alignmentControls(hasGhost: ghostImage != nil)
+                    if ghostImage != nil {
+                        alignmentControls
                     }
                     poseSelector
                     bottomBar
@@ -67,6 +68,11 @@ struct ProgressPhotoCaptureView: View {
                 onRetake: { capturedImage = nil },
                 onUse: { saveCapturedPhoto(wrapped.image) }
             )
+        }
+        .alert("Couldn't save photo", isPresented: .constant(saveError != nil)) {
+            Button("OK") { saveError = nil }
+        } message: {
+            Text(saveError ?? "")
         }
     }
 
@@ -105,7 +111,7 @@ struct ProgressPhotoCaptureView: View {
         }
     }
 
-    private func alignmentControls(hasGhost: Bool) -> some View {
+    private var alignmentControls: some View {
         VStack(spacing: 10) {
             HStack(spacing: 12) {
                 Toggle(isOn: $showGhostOverlay.animation()) {
@@ -190,28 +196,29 @@ struct ProgressPhotoCaptureView: View {
         }
     }
 
+    /// Saving is fully synchronous (a JPEG encode plus a SwiftData insert), and SwiftData
+    /// models must only be touched on the main actor — so this deliberately does NOT wrap
+    /// the work in a Task.
+    @MainActor
     private func saveCapturedPhoto(_ image: UIImage) {
         isSaving = true
-        Task {
-            do {
-                let fileName = try PhotoStorageService.save(image, dayNumber: dailyEntry.dayNumber, pose: pose)
-                let photo = ProgressPhoto(dayNumber: dailyEntry.dayNumber, date: .now, pose: pose, fileName: fileName)
-                photo.dailyEntry = dailyEntry
-                dailyEntry.photos.append(photo)
-                modelContext.insert(photo)
-                // Only 75 Hard carries a daily photo task to check off; under Soft and
-                // Medium the photo is a milestone, not a checklist item.
-                if challenge.mode.photoCadence == .daily {
-                    dailyEntry.markComplete(.progressPhoto)
-                }
-                try modelContext.save()
-                await MainActor.run {
-                    isSaving = false
-                    dismiss()
-                }
-            } catch {
-                await MainActor.run { isSaving = false }
+        defer { isSaving = false }
+        do {
+            let fileName = try PhotoStorageService.save(image, dayNumber: dailyEntry.dayNumber, pose: pose)
+            let photo = ProgressPhoto(dayNumber: dailyEntry.dayNumber, date: .now, pose: pose, fileName: fileName)
+            modelContext.insert(photo)
+            // Setting the inverse is enough; SwiftData maintains dailyEntry.photos.
+            photo.dailyEntry = dailyEntry
+            // Only 75 Hard carries a daily photo task to check off; under Soft and
+            // Medium the photo is a milestone, not a checklist item.
+            if challenge.mode.photoCadence == .daily {
+                dailyEntry.markComplete(.progressPhoto)
             }
+            try modelContext.save()
+            capturedImage = nil
+            dismiss()
+        } catch {
+            saveError = error.localizedDescription
         }
     }
 }

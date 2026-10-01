@@ -8,76 +8,94 @@ struct TodayView: View {
     @State private var showCamera = false
     @State private var showResetConfirm = false
 
-    private var dailyEntry: DailyEntry {
+    /// Today's record, or nil until `ensureTodayEntry()` has created it.
+    ///
+    /// This is deliberately read-only: creating the entry lazily from inside `body` would
+    /// mutate SwiftData mid-render, which SwiftUI treats as a state change and re-renders
+    /// for — a feedback loop. Creation happens once in `.task` instead.
+    private var dailyEntry: DailyEntry? {
+        challenge.entry(forDay: challenge.currentDayNumber)
+    }
+
+    @MainActor
+    private func ensureTodayEntry() {
         let dayNumber = challenge.currentDayNumber
-        if let existing = challenge.entry(forDay: dayNumber) {
-            return existing
-        }
-        let entry = DailyEntry(dayNumber: dayNumber, date: .now)
-        entry.challenge = challenge
-        challenge.days.append(entry)
+        guard challenge.entry(forDay: dayNumber) == nil else { return }
+        let entry = DailyEntry(dayNumber: dayNumber, date: .now, attemptNumber: challenge.attemptNumber)
         modelContext.insert(entry)
+        entry.challenge = challenge
         try? modelContext.save()
-        return entry
     }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 20) {
-                    header
-
-                    if challenge.needsHardReset {
-                        hardResetBanner
-                    }
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(challenge.mode.tasks) { task in
-                            row(for: task)
-                            if task.id != challenge.mode.tasks.last?.id {
-                                Divider()
-                            }
-                        }
-                    }
-                    .padding()
-                    .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
-
-                    if challenge.mode.photoCadence == .milestone {
-                        milestonePhotoCard
-                    }
-
-                    if challenge.mode.allowsWeeklyRestDay {
-                        restDayCard
-                    }
+                if let entry = dailyEntry {
+                    content(for: entry)
+                } else {
+                    ProgressView().padding(.top, 80)
                 }
-                .padding()
             }
             .navigationTitle(challenge.mode.rawValue)
+            .task { ensureTodayEntry() }
             .fullScreenCover(isPresented: $showCamera) {
-                ProgressPhotoCaptureView(challenge: challenge, dailyEntry: dailyEntry)
+                if let entry = dailyEntry {
+                    ProgressPhotoCaptureView(challenge: challenge, dailyEntry: entry)
+                }
             }
             .alert("Restart at Day 1?", isPresented: $showResetConfirm) {
                 Button("Restart", role: .destructive) {
-                    challenge.restartFromDayOne(in: modelContext)
+                    challenge.restartFromDayOne()
                     try? modelContext.save()
+                    ensureTodayEntry()
                 }
                 Button("Not yet", role: .cancel) {}
             } message: {
-                Text("75 Hard requires starting over after a missed day. Your photos are kept.")
+                Text("75 Hard requires starting over after a missed day. Your previous days and photos stay in your history.")
             }
         }
     }
 
-    private var header: some View {
+    private func content(for entry: DailyEntry) -> some View {
+        VStack(spacing: 20) {
+            header(for: entry)
+
+            if challenge.needsHardReset {
+                hardResetBanner
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(challenge.mode.tasks) { task in
+                    row(for: task, entry: entry)
+                    if task.id != challenge.mode.tasks.last?.id {
+                        Divider()
+                    }
+                }
+            }
+            .padding()
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
+
+            if challenge.mode.photoCadence == .milestone {
+                milestonePhotoCard(for: entry)
+            }
+
+            if challenge.mode.allowsWeeklyRestDay {
+                restDayCard(for: entry)
+            }
+        }
+        .padding()
+    }
+
+    private func header(for entry: DailyEntry) -> some View {
         VStack(spacing: 10) {
             ZStack {
                 Circle()
                     .stroke(.secondary.opacity(0.15), lineWidth: 10)
                 Circle()
-                    .trim(from: 0, to: dailyEntry.completionFraction)
+                    .trim(from: 0, to: entry.completionFraction)
                     .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 10, lineCap: .round))
                     .rotationEffect(.degrees(-90))
-                    .animation(.easeInOut, value: dailyEntry.completionFraction)
+                    .animation(.easeInOut, value: entry.completionFraction)
                 VStack {
                     Text("Day \(challenge.currentDayNumber)")
                         .font(.title2.bold())
@@ -123,7 +141,7 @@ struct TodayView: View {
             Label("You missed a day", systemImage: "exclamationmark.triangle.fill")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.orange)
-            Text("75 Hard has no grace days — the rule is to restart at Day 1. Your progress photos stay saved.")
+            Text("75 Hard has no grace days — the rule is to restart at Day 1. Your history is kept.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Button("Restart at Day 1") { showResetConfirm = true }
@@ -137,58 +155,59 @@ struct TodayView: View {
     }
 
     @ViewBuilder
-    private func row(for task: TaskKind) -> some View {
+    private func row(for task: TaskKind, entry: DailyEntry) -> some View {
         switch task {
         case .water:
             counterRow(
-                task: task,
-                label: "Water",
-                current: dailyEntry.waterLiters,
+                task: task, entry: entry, label: "Water",
+                current: entry.waterLiters,
                 goal: challenge.waterGoalLiters,
                 step: 0.25,
                 format: { "\($0.formatted(.number.precision(.fractionLength(0...1))))L" },
-                set: { dailyEntry.waterLiters = max(0, $0) }
+                set: { entry.waterLiters = max(0, $0) }
             )
         case .reading(let goal, _):
             switch goal {
             case .pages(let pages):
                 counterRow(
-                    task: task,
-                    label: "Reading",
-                    current: Double(dailyEntry.pagesRead),
+                    task: task, entry: entry, label: "Reading",
+                    current: Double(entry.pagesRead),
                     goal: Double(pages),
                     step: 1,
                     format: { "\(Int($0)) pages" },
-                    set: { dailyEntry.pagesRead = max(0, Int($0)) }
+                    set: { entry.pagesRead = max(0, Int($0)) }
                 )
             case .minutes(let minutes):
                 counterRow(
-                    task: task,
-                    label: "Reading",
-                    current: Double(dailyEntry.readingMinutes),
+                    task: task, entry: entry, label: "Reading",
+                    current: Double(entry.readingMinutes),
                     goal: Double(minutes),
                     step: 1,
                     format: { "\(Int($0)) min" },
-                    set: { dailyEntry.readingMinutes = max(0, Int($0)) }
+                    set: { entry.readingMinutes = max(0, Int($0)) }
                 )
             }
         case .meditation(let minutes):
             counterRow(
-                task: task,
-                label: "Meditation",
-                current: Double(dailyEntry.meditationMinutes),
+                task: task, entry: entry, label: "Meditation",
+                current: Double(entry.meditationMinutes),
                 goal: Double(minutes),
                 step: 1,
                 format: { "\(Int($0)) min" },
-                set: { dailyEntry.meditationMinutes = max(0, Int($0)) }
+                set: { entry.meditationMinutes = max(0, Int($0)) }
             )
         case .progressPhoto:
-            ChecklistRowView(task: task, isComplete: dailyEntry.isComplete(task)) {
+            ChecklistRowView(task: task, isComplete: entry.isComplete(task)) {
                 showCamera = true
             }
+        case .workout where entry.isPlannedRestDay:
+            // On a planned 75 Soft rest day the workout is excused, not pending.
+            ChecklistRowView(task: task, isComplete: true) {}
+                .disabled(true)
+                .opacity(0.5)
         default:
-            ChecklistRowView(task: task, isComplete: dailyEntry.isComplete(task)) {
-                dailyEntry.toggle(task)
+            ChecklistRowView(task: task, isComplete: entry.isComplete(task)) {
+                entry.toggle(task)
                 try? modelContext.save()
             }
         }
@@ -197,6 +216,7 @@ struct TodayView: View {
     /// Shared numeric-goal row: water, pages, reading minutes, meditation minutes.
     private func counterRow(
         task: TaskKind,
+        entry: DailyEntry,
         label: String,
         current: Double,
         goal: Double,
@@ -210,17 +230,19 @@ struct TodayView: View {
                 Spacer()
                 Text("\(format(current)) / \(format(goal))")
                     .font(.subheadline)
-                    .foregroundStyle(dailyEntry.isComplete(task) ? Color.accentColor : .secondary)
+                    .foregroundStyle(entry.isComplete(task) ? Color.accentColor : Color.secondary)
             }
             HStack(spacing: 12) {
                 stepButton(systemImage: "minus") {
-                    set(current - step)
-                    syncCompletion(task: task, current: current - step, goal: goal)
+                    let next = current - step
+                    set(next)
+                    syncCompletion(task: task, entry: entry, current: next, goal: goal)
                 }
                 ProgressView(value: min(current / max(goal, 0.001), 1))
                 stepButton(systemImage: "plus") {
-                    set(current + step)
-                    syncCompletion(task: task, current: current + step, goal: goal)
+                    let next = current + step
+                    set(next)
+                    syncCompletion(task: task, entry: entry, current: next, goal: goal)
                 }
             }
         }
@@ -236,21 +258,22 @@ struct TodayView: View {
         .buttonStyle(.plain)
     }
 
-    private func syncCompletion(task: TaskKind, current: Double, goal: Double) {
+    private func syncCompletion(task: TaskKind, entry: DailyEntry, current: Double, goal: Double) {
         if current >= goal {
-            dailyEntry.markComplete(task)
+            entry.markComplete(task)
         } else {
-            dailyEntry.completedTaskIDs.remove(task.id)
+            entry.markIncomplete(task)
         }
         try? modelContext.save()
     }
 
     /// Soft and Medium don't require a daily photo — this surfaces the Day 1 / Day 75
     /// milestones and otherwise offers an optional shot.
-    private var milestonePhotoCard: some View {
+    private func milestonePhotoCard(for entry: DailyEntry) -> some View {
         let day = challenge.currentDayNumber
         let isMilestone = challenge.isPhotoExpected(onDay: day)
-        let hasPhotoToday = !dailyEntry.photos.isEmpty
+        let hasPhotoToday = !entry.photos.isEmpty
+        let highlight = isMilestone && !hasPhotoToday
 
         return VStack(alignment: .leading, spacing: 8) {
             Label(
@@ -258,7 +281,7 @@ struct TodayView: View {
                 systemImage: hasPhotoToday ? "checkmark.circle.fill" : "camera.fill"
             )
             .font(.subheadline.weight(.semibold))
-            .foregroundStyle(hasPhotoToday ? Color.accentColor : .primary)
+            .foregroundStyle(hasPhotoToday ? Color.accentColor : Color.primary)
 
             Text(isMilestone
                  ? "\(challenge.mode.rawValue) calls for a photo on Day 1 and Day \(challenge.totalDays). This is one of them."
@@ -267,7 +290,7 @@ struct TodayView: View {
                 .foregroundStyle(.secondary)
 
             Group {
-                if isMilestone && !hasPhotoToday {
+                if highlight {
                     Button("Take Photo") { showCamera = true }
                         .buttonStyle(.borderedProminent)
                 } else {
@@ -280,17 +303,17 @@ struct TodayView: View {
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            isMilestone && !hasPhotoToday ? Color.accentColor.opacity(0.10) : Color(.secondarySystemBackground),
+            highlight ? Color.accentColor.opacity(0.10) : Color(.secondarySystemBackground),
             in: RoundedRectangle(cornerRadius: 16)
         )
     }
 
-    private var restDayCard: some View {
+    private func restDayCard(for entry: DailyEntry) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Toggle(isOn: Binding(
-                get: { dailyEntry.isPlannedRestDay },
+                get: { entry.isPlannedRestDay },
                 set: { newValue in
-                    dailyEntry.isPlannedRestDay = newValue
+                    entry.isPlannedRestDay = newValue
                     try? modelContext.save()
                 }
             )) {

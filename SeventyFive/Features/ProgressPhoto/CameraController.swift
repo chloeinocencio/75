@@ -75,19 +75,43 @@ final class CameraController: NSObject, ObservableObject {
 
 extension CameraController: AVCapturePhotoCaptureDelegate {
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
-        guard error == nil,
-              let data = photo.fileDataRepresentation(),
-              let image = UIImage(data: data) else {
-            captureCompletion?(nil)
-            return
+        // AVFoundation calls this on its own queue; the completion feeds SwiftUI @State,
+        // so it has to land on the main thread.
+        let result: UIImage? = {
+            guard error == nil,
+                  let data = photo.fileDataRepresentation(),
+                  let image = UIImage(data: data) else { return nil }
+            return currentPosition == .front ? image.mirroredHorizontally() : image
+        }()
+
+        DispatchQueue.main.async { [weak self] in
+            self?.captureCompletion?(result)
         }
-        let normalized = currentPosition == .front ? image.mirroredHorizontally() : image
-        captureCompletion?(normalized)
     }
 }
 
 extension UIImage {
+    /// Mirrors the image across its vertical axis. Front-camera captures come back
+    /// un-mirrored relative to the live preview, so they'd otherwise look "flipped"
+    /// compared to what the user framed.
+    ///
+    /// This has to map every orientation to its mirrored counterpart — capture output is
+    /// usually `.right` or `.left` in portrait, not `.up`, so special-casing `.up` alone
+    /// would silently do nothing in the common case.
     func mirroredHorizontally() -> UIImage {
-        UIImage(cgImage: cgImage!, scale: scale, orientation: imageOrientation == .up ? .upMirrored : imageOrientation)
+        guard let cgImage else { return self }
+        let mirrored: UIImage.Orientation
+        switch imageOrientation {
+        case .up: mirrored = .upMirrored
+        case .upMirrored: mirrored = .up
+        case .down: mirrored = .downMirrored
+        case .downMirrored: mirrored = .down
+        case .left: mirrored = .leftMirrored
+        case .leftMirrored: mirrored = .left
+        case .right: mirrored = .rightMirrored
+        case .rightMirrored: mirrored = .right
+        @unknown default: mirrored = imageOrientation
+        }
+        return UIImage(cgImage: cgImage, scale: scale, orientation: mirrored)
     }
 }

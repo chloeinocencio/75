@@ -8,11 +8,13 @@ struct PhotoTimelineView: View {
 
     private let columns = [GridItem(.adaptive(minimum: 100), spacing: 4)]
 
+    /// Every photo of the selected pose, oldest first, across all attempts.
     private var photosByDay: [(day: Int, photo: ProgressPhoto)] {
         challenge.days
-            .sorted { $0.dayNumber < $1.dayNumber }
-            .compactMap { day in
-                day.photos.first { $0.pose == selectedPose }.map { (day.dayNumber, $0) }
+            .sorted { ($0.attemptNumber, $0.dayNumber) < ($1.attemptNumber, $1.dayNumber) }
+            .compactMap { day -> (day: Int, photo: ProgressPhoto)? in
+                guard let photo = day.photos.first(where: { $0.pose == selectedPose }) else { return nil }
+                return (day: day.dayNumber, photo: photo)
             }
     }
 
