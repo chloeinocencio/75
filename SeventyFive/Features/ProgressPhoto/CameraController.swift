@@ -18,6 +18,9 @@ final class CameraController: NSObject, ObservableObject {
     private let photoOutput = AVCapturePhotoOutput()
     private(set) var currentPosition: AVCaptureDevice.Position = .front
     @Published var permission: CameraPermission = .undetermined
+    /// False on the Simulator and on any device without a usable camera. The UI offers the
+    /// photo picker instead of a shutter that would do nothing.
+    @Published private(set) var hasCamera = true
     private var captureCompletion: ((UIImage?) -> Void)?
 
     var isAuthorized: Bool { permission == .authorized }
@@ -64,8 +67,12 @@ final class CameraController: NSObject, ObservableObject {
         session.inputs.forEach { session.removeInput($0) }
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position),
               let input = try? AVCaptureDeviceInput(device: device),
-              session.canAddInput(input) else { return }
+              session.canAddInput(input) else {
+            hasCamera = false
+            return
+        }
         session.addInput(input)
+        hasCamera = true
     }
 
     func start() {
@@ -90,6 +97,16 @@ final class CameraController: NSObject, ObservableObject {
     }
 
     func capturePhoto(completion: @escaping (UIImage?) -> Void) {
+        // AVCapturePhotoOutput raises an Objective-C exception (a crash, not an error) if it
+        // has no live video connection — e.g. no camera, or the session isn't running yet.
+        guard captureCompletion == nil,
+              session.isRunning,
+              let connection = photoOutput.connection(with: .video),
+              connection.isEnabled, connection.isActive
+        else {
+            completion(nil)
+            return
+        }
         captureCompletion = completion
         let settings = AVCapturePhotoSettings()
         settings.photoQualityPrioritization = .balanced
@@ -109,7 +126,9 @@ extension CameraController: AVCapturePhotoCaptureDelegate {
         }()
 
         DispatchQueue.main.async { [weak self] in
-            self?.captureCompletion?(result)
+            let completion = self?.captureCompletion
+            self?.captureCompletion = nil
+            completion?(result)
         }
     }
 }

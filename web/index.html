@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
 <meta name="theme-color" content="#f5f0ea" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#14130e" media="(prefers-color-scheme: dark)">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
 <meta name="description" content="Track the 75 Soft, 75 Medium or 75 Hard challenge, with daily progress photos.">
 <title>75</title>
 <link rel="stylesheet" href="app.css">
@@ -141,14 +142,5 @@
 </div>
 
 <script src="app.js"></script>
-<script>
-  // Offline shell. Registered after load so it never delays first paint, and only over
-  // https or localhost, where service workers are allowed at all.
-  if ("serviceWorker" in navigator) {
-    addEventListener("load", () => {
-      navigator.serviceWorker.register("sw.js").catch(() => {});
-    });
-  }
-</script>
 </body>
 </html>

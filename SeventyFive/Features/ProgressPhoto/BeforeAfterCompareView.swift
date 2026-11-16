@@ -4,106 +4,134 @@ struct BeforeAfterCompareView: View {
     let challenge: Challenge
 
     @State private var pose: PhotoPose = .front
-    @State private var beforeDay: Int?
-    @State private var afterDay: Int?
+    /// Selections are photo IDs, not day numbers: after a 75 Hard restart "Day 5" exists in
+    /// more than one attempt, and a day number alone picked whichever came first.
+    @State private var beforeID: UUID?
+    @State private var afterID: UUID?
     @State private var dividerFraction: CGFloat = 0.5
+    @State private var beforeImage: UIImage?
+    @State private var afterImage: UIImage?
     @State private var shareImage: ShareableImage?
-
-    /// Every day that has a photo of the selected pose, across all attempts, oldest first.
-    /// Deduplicated by day number — after a 75 Hard restart the same day number can recur,
-    /// and `ForEach(id: \.self)` requires unique ids.
-    private var daysWithPhoto: [Int] {
-        var seen = Set<Int>()
-        return challenge.days
-            .filter { day in day.photos.contains { $0.pose == pose } }
-            .sorted { ($0.attemptNumber, $0.dayNumber) < ($1.attemptNumber, $1.dayNumber) }
-            .map(\.dayNumber)
-            .filter { seen.insert($0).inserted }
-    }
-
-    /// Resolved from `days` directly rather than `challenge.entry(forDay:)`, which is scoped
-    /// to the current attempt and would miss photos from an earlier 75 Hard run.
-    private func image(forDay day: Int?) -> UIImage? {
-        guard let day,
-              let photo = challenge.days
-                  .filter({ $0.dayNumber == day })
-                  .flatMap(\.photos)
-                  .first(where: { $0.pose == pose })
-        else { return nil }
-        return PhotoStorageService.loadImage(fileName: photo.fileName)
-    }
+    @State private var isRendering = false
 
     var body: some View {
+        let photos = challenge.photos(pose: pose)
+
         NavigationStack {
-            VStack(spacing: 16) {
-                Picker("Pose", selection: $pose) {
-                    ForEach(PhotoPose.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-
-                HStack {
-                    dayPicker("Before", selection: $beforeDay)
-                    Image(systemName: "arrow.right")
-                        .foregroundStyle(.secondary)
-                    dayPicker("After", selection: $afterDay)
-                }
-
-                if daysWithPhoto.count < 2 {
-                    ContentUnavailableView(
-                        "Need at least two \(pose.rawValue.lowercased()) photos",
-                        systemImage: "square.split.2x1",
-                        description: Text("Keep taking daily progress photos to unlock comparisons.")
-                    )
-                    .padding(.top, 40)
-                } else if let before = image(forDay: beforeDay), let after = image(forDay: afterDay) {
-                    compareSlider(before: before, after: after)
-                    Button {
-                        shareImage = ShareableImage(image: composite(before: before, after: after))
-                    } label: {
-                        Label("Share This Comparison", systemImage: "square.and.arrow.up")
+            ScrollView {
+                VStack(spacing: 16) {
+                    Picker("Pose", selection: $pose) {
+                        ForEach(PhotoPose.allCases) { Text($0.rawValue).tag($0) }
                     }
-                    .buttonStyle(.borderedProminent)
-                } else {
-                    ContentUnavailableView(
-                        "Pick two days to compare",
-                        systemImage: "photo.stack",
-                        description: Text("Choose a before and after day above.")
-                    )
-                    .padding(.top, 40)
-                }
+                    .pickerStyle(.segmented)
 
-                Spacer()
+                    if photos.count < 2 {
+                        ContentUnavailableView(
+                            "Need two \(pose.rawValue.lowercased()) photos",
+                            systemImage: "square.split.2x1",
+                            description: Text("Take a \(pose.rawValue.lowercased()) photo now and another later to see your progress side by side.")
+                        )
+                        .padding(.top, 40)
+                    } else {
+                        HStack(spacing: 10) {
+                            picker("Before", photos: photos, selection: $beforeID)
+                            Image(systemName: "arrow.right")
+                                .font(.footnote.weight(.bold))
+                                .foregroundStyle(Theme.dim)
+                            picker("After", photos: photos, selection: $afterID)
+                        }
+
+                        if let beforeImage, let afterImage {
+                            compareSlider(before: beforeImage, after: afterImage, photos: photos)
+
+                            Button {
+                                renderShare(photos: photos)
+                            } label: {
+                                if isRendering {
+                                    ProgressView().tint(Theme.limeInk)
+                                } else {
+                                    Label("Share this comparison", systemImage: "square.and.arrow.up")
+                                }
+                            }
+                            .buttonStyle(LimeButtonStyle())
+                            .disabled(isRendering)
+
+                            Text("Shared images include only these two photos. Nothing is uploaded unless you choose where to send it.")
+                                .font(.caption)
+                                .foregroundStyle(Theme.dim)
+                                .multilineTextAlignment(.center)
+                        } else {
+                            ProgressView().padding(.top, 60)
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
             }
-            .padding()
+            .themedBackground(glow: 0.15)
             .navigationTitle("Before & After")
-            .onAppear {
-                if beforeDay == nil { beforeDay = daysWithPhoto.first }
-                if afterDay == nil { afterDay = daysWithPhoto.last }
+            .onAppear { resetSelection(photos) }
+            .onChange(of: pose) { _, _ in
+                beforeID = nil
+                afterID = nil
+                resetSelection(challenge.photos(pose: pose))
             }
+            .onChange(of: photos.map(\.id)) { _, _ in resetSelection(photos) }
+            // Images are decoded once per selection change — never during a divider drag.
+            .task(id: beforeID) { beforeImage = await load(beforeID, in: challenge.photos(pose: pose)) }
+            .task(id: afterID) { afterImage = await load(afterID, in: challenge.photos(pose: pose)) }
             .sheet(item: $shareImage) { wrapped in
                 ActivityShareSheet(items: [wrapped.image])
             }
         }
     }
 
-    private func dayPicker(_ label: String, selection: Binding<Int?>) -> some View {
+    /// Defaults to first vs latest, and repairs a selection whose photo was deleted.
+    private func resetSelection(_ photos: [ProgressPhoto]) {
+        let ids = Set(photos.map(\.id))
+        if beforeID == nil || !ids.contains(beforeID!) { beforeID = photos.first?.id }
+        if afterID == nil || !ids.contains(afterID!) { afterID = photos.last?.id }
+    }
+
+    private func load(_ id: UUID?, in photos: [ProgressPhoto]) async -> UIImage? {
+        guard let id, let photo = photos.first(where: { $0.id == id }) else { return nil }
+        return await ImageCache.shared.load(fileName: photo.fileName, maxPixelSize: PhotoSize.full.pixels)
+    }
+
+    private func label(for id: UUID?, in photos: [ProgressPhoto]) -> String {
+        photos.first { $0.id == id }?.label(currentAttempt: challenge.attemptNumber) ?? "Select"
+    }
+
+    private func picker(_ title: String, photos: [ProgressPhoto], selection: Binding<UUID?>) -> some View {
         Menu {
-            ForEach(daysWithPhoto, id: \.self) { day in
-                Button("Day \(day)") { selection.wrappedValue = day }
+            ForEach(photos) { photo in
+                Button {
+                    selection.wrappedValue = photo.id
+                } label: {
+                    if selection.wrappedValue == photo.id {
+                        Label(photo.label(currentAttempt: challenge.attemptNumber), systemImage: "checkmark")
+                    } else {
+                        Text(photo.label(currentAttempt: challenge.attemptNumber))
+                    }
+                }
             }
         } label: {
             VStack(alignment: .leading, spacing: 2) {
-                Text(label).font(.caption).foregroundStyle(.secondary)
-                Text(selection.wrappedValue.map { "Day \($0)" } ?? "Select")
-                    .font(.subheadline.weight(.semibold))
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.dim)
+                Text(label(for: selection.wrappedValue, in: photos))
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(Theme.ink)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(10)
-            .background(.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+            .padding(12)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous))
         }
+        .accessibilityLabel("\(title) photo: \(label(for: selection.wrappedValue, in: photos))")
     }
 
-    private func compareSlider(before: UIImage, after: UIImage) -> some View {
+    private func compareSlider(before: UIImage, after: UIImage, photos: [ProgressPhoto]) -> some View {
         GeometryReader { geo in
             let width = geo.size.width
             ZStack(alignment: .leading) {
@@ -128,59 +156,107 @@ struct BeforeAfterCompareView: View {
                     .shadow(radius: 2)
                     .overlay(
                         Circle()
-                            .fill(.white)
-                            .frame(width: 28, height: 28)
-                            .overlay(Image(systemName: "arrow.left.and.right").font(.caption).foregroundStyle(.black))
-                            .shadow(radius: 2)
+                            .fill(Theme.lime)
+                            .frame(width: 34, height: 34)
+                            .overlay(Image(systemName: "arrow.left.and.right").font(.caption.weight(.bold)).foregroundStyle(Theme.limeInk))
+                            .shadow(radius: 3)
                     )
                     .offset(x: width * dividerFraction - 1.5)
-                    .gesture(
-                        DragGesture().onChanged { value in
-                            dividerFraction = min(max(value.location.x / width, 0), 1)
-                        }
-                    )
 
                 VStack {
                     HStack {
-                        dayLabel("Day \(beforeDay ?? 0)")
+                        tag(label(for: beforeID, in: photos))
                         Spacer()
+                        tag(label(for: afterID, in: photos))
                     }
                     Spacer()
                 }
-                .padding(8)
-
-                VStack {
-                    HStack {
-                        Spacer()
-                        dayLabel("Day \(afterDay ?? 0)")
-                    }
-                    Spacer()
+                .padding(10)
+            }
+            // The whole image is the drag target, not just the 3-pt divider line.
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0).onChanged { value in
+                    dividerFraction = min(max(value.location.x / width, 0), 1)
                 }
-                .padding(8)
+            )
+        }
+        .aspectRatio(3 / 4, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Before and after comparison")
+        .accessibilityValue("Showing \(Int(dividerFraction * 100)) percent before")
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: dividerFraction = min(dividerFraction + 0.1, 1)
+            case .decrement: dividerFraction = max(dividerFraction - 0.1, 0)
+            @unknown default: break
             }
         }
-        .aspectRatio(3/4, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
-    private func dayLabel(_ text: String) -> some View {
+    private func tag(_ text: String) -> some View {
         Text(text)
-            .font(.caption.weight(.semibold))
-            .padding(.horizontal, 8)
+            .font(.caption.weight(.bold))
+            .padding(.horizontal, 9)
             .padding(.vertical, 4)
-            .background(.black.opacity(0.5))
+            .background(.black.opacity(0.5), in: Capsule())
             .foregroundStyle(.white)
-            .clipShape(Capsule())
     }
 
-    /// Renders a single flattened image (side-by-side) for sharing outside the divider UI.
-    private func composite(before: UIImage, after: UIImage) -> UIImage {
-        let size = CGSize(width: before.size.width + after.size.width, height: max(before.size.height, after.size.height))
-        let renderer = UIGraphicsImageRenderer(size: size)
-        return renderer.image { _ in
-            before.draw(in: CGRect(x: 0, y: 0, width: before.size.width, height: before.size.height))
-            after.draw(in: CGRect(x: before.size.width, y: 0, width: after.size.width, height: after.size.height))
+    /// Renders a labelled side-by-side image at a sensible size, off the main thread.
+    private func renderShare(photos: [ProgressPhoto]) {
+        guard let before = photos.first(where: { $0.id == beforeID }),
+              let after = photos.first(where: { $0.id == afterID }) else { return }
+        let beforeName = before.fileName, afterName = after.fileName
+        let beforeLabel = before.label(currentAttempt: challenge.attemptNumber)
+        let afterLabel = after.label(currentAttempt: challenge.attemptNumber)
+        isRendering = true
+        Task {
+            let image = await Task.detached(priority: .userInitiated) {
+                Self.composite(beforeName: beforeName, afterName: afterName, beforeLabel: beforeLabel, afterLabel: afterLabel)
+            }.value
+            isRendering = false
+            if let image { shareImage = ShareableImage(image: image) }
         }
+    }
+
+    private static func composite(beforeName: String, afterName: String, beforeLabel: String, afterLabel: String) -> UIImage? {
+        guard let before = ImageCache.shared.image(fileName: beforeName, maxPixelSize: 1600),
+              let after = ImageCache.shared.image(fileName: afterName, maxPixelSize: 1600) else { return nil }
+        let panel = CGSize(width: 900, height: 1200)
+        let gap: CGFloat = 12
+        let size = CGSize(width: panel.width * 2 + gap, height: panel.height)
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: size, format: format).image { ctx in
+            UIColor(hex: 0xF5F0EA).setFill()
+            ctx.fill(CGRect(origin: .zero, size: size))
+            for (index, (image, text)) in [(before, beforeLabel), (after, afterLabel)].enumerated() {
+                let rect = CGRect(x: CGFloat(index) * (panel.width + gap), y: 0, width: panel.width, height: panel.height)
+                ctx.cgContext.saveGState()
+                UIBezierPath(rect: rect).addClip()
+                image.draw(in: aspectFill(image.size, in: rect))
+                ctx.cgContext.restoreGState()
+
+                let attrs: [NSAttributedString.Key: Any] = [
+                    .font: UIFont.systemFont(ofSize: 40, weight: .heavy),
+                    .foregroundColor: UIColor(hex: 0x0A0A0C),
+                ]
+                let label = NSAttributedString(string: text, attributes: attrs)
+                let labelSize = label.size()
+                let pill = CGRect(x: rect.minX + 28, y: rect.maxY - labelSize.height - 56, width: labelSize.width + 36, height: labelSize.height + 20)
+                UIColor(hex: 0xDAE644).setFill()
+                UIBezierPath(roundedRect: pill, cornerRadius: pill.height / 2).fill()
+                label.draw(at: CGPoint(x: pill.minX + 18, y: pill.minY + 10))
+            }
+        }
+    }
+
+    private static func aspectFill(_ size: CGSize, in rect: CGRect) -> CGRect {
+        let scale = max(rect.width / size.width, rect.height / size.height)
+        let w = size.width * scale, h = size.height * scale
+        return CGRect(x: rect.midX - w / 2, y: rect.midY - h / 2, width: w, height: h)
     }
 }
 

@@ -15,7 +15,7 @@ final class ProgressPhoto {
     var dayNumber: Int
     var date: Date
     var poseRaw: String
-    /// Filename inside the app's PhotoStorage documents subdirectory. Never store the raw image in SwiftData.
+    /// Filename inside the app's ProgressPhotos directory. Never store the raw image in SwiftData.
     var fileName: String
 
     var dailyEntry: DailyEntry?
@@ -31,5 +31,14 @@ final class ProgressPhoto {
     var pose: PhotoPose {
         get { PhotoPose(rawValue: poseRaw) ?? .front }
         set { poseRaw = newValue.rawValue }
+    }
+
+    /// "Day 12", or "Day 12 · Try 1" for a photo from an earlier 75 Hard attempt, so two
+    /// photos with the same day number are never ambiguous.
+    func label(currentAttempt: Int) -> String {
+        guard let attempt = dailyEntry?.attemptNumber, attempt != currentAttempt else {
+            return "Day \(dayNumber)"
+        }
+        return "Day \(dayNumber) · Try \(attempt)"
     }
 }

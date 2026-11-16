@@ -1,144 +1,172 @@
 import SwiftUI
+import SwiftData
 
 struct PhotoTimelineView: View {
     let challenge: Challenge
 
     @State private var selectedPose: PhotoPose = .front
-    @State private var viewerStartIndex: Int?
+    @State private var viewer: ViewerStart?
 
-    private let columns = [GridItem(.adaptive(minimum: 100), spacing: 4)]
-
-    /// Every photo of the selected pose, oldest first, across all attempts.
-    private var photosByDay: [(day: Int, photo: ProgressPhoto)] {
-        challenge.days
-            .sorted { ($0.attemptNumber, $0.dayNumber) < ($1.attemptNumber, $1.dayNumber) }
-            .compactMap { day -> (day: Int, photo: ProgressPhoto)? in
-                guard let photo = day.photos.first(where: { $0.pose == selectedPose }) else { return nil }
-                return (day: day.dayNumber, photo: photo)
-            }
-    }
+    private let columns = [GridItem(.adaptive(minimum: 104), spacing: 6)]
 
     var body: some View {
+        let photos = challenge.photos(pose: selectedPose)
+
         NavigationStack {
             ScrollView {
-                Picker("Pose", selection: $selectedPose) {
-                    ForEach(PhotoPose.allCases) { pose in
-                        Text(pose.rawValue).tag(pose)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .padding()
-
-                if photosByDay.isEmpty {
-                    ContentUnavailableView(
-                        "No \(selectedPose.rawValue.lowercased()) photos yet",
-                        systemImage: "photo.on.rectangle.angled",
-                        description: Text("Take your first progress photo from the Today tab.")
-                    )
-                    .padding(.top, 60)
-                } else {
-                    LazyVGrid(columns: columns, spacing: 4) {
-                        ForEach(Array(photosByDay.enumerated()), id: \.element.photo.id) { index, entry in
-                            thumbnail(for: entry, index: index)
+                VStack(spacing: 16) {
+                    Picker("Pose", selection: $selectedPose) {
+                        ForEach(PhotoPose.allCases) { pose in
+                            Text(pose.rawValue).tag(pose)
                         }
                     }
-                    .padding(.horizontal, 4)
+                    .pickerStyle(.segmented)
+
+                    if photos.isEmpty {
+                        ContentUnavailableView(
+                            "No \(selectedPose.rawValue.lowercased()) photos yet",
+                            systemImage: "photo.on.rectangle.angled",
+                            description: Text("Take your first progress photo from the Today tab. Photos stay on this iPhone.")
+                        )
+                        .padding(.top, 50)
+                    } else {
+                        LazyVGrid(columns: columns, spacing: 6) {
+                            ForEach(Array(photos.enumerated()), id: \.element.id) { index, photo in
+                                thumbnail(photo, index: index)
+                            }
+                        }
+                    }
                 }
+                .padding(.horizontal, 16)
             }
+            .themedBackground(glow: 0.15)
             .navigationTitle("Progress Photos")
-            .fullScreenCover(item: $viewerStartIndex.asIdentifiableIndex) { wrapped in
-                PhotoViewerView(entries: photosByDay, startIndex: wrapped.index)
+            .fullScreenCover(item: $viewer) { start in
+                PhotoViewerView(challenge: challenge, pose: selectedPose, startID: start.id)
             }
         }
     }
 
-    private func thumbnail(for entry: (day: Int, photo: ProgressPhoto), index: Int) -> some View {
+    private func thumbnail(_ photo: ProgressPhoto, index: Int) -> some View {
         Button {
-            viewerStartIndex = index
+            viewer = ViewerStart(id: photo.id)
         } label: {
-            ZStack(alignment: .bottomLeading) {
-                if let image = PhotoStorageService.loadImage(fileName: entry.photo.fileName) {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                } else {
-                    Rectangle().fill(.secondary.opacity(0.2))
+            Color.clear
+                .aspectRatio(3 / 4, contentMode: .fit)
+                .overlay { StoredPhotoView(fileName: photo.fileName, size: .thumbnail) }
+                .overlay(alignment: .bottomLeading) {
+                    Text(photo.label(currentAttempt: challenge.attemptNumber))
+                        .font(.caption2.weight(.bold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(.black.opacity(0.5), in: Capsule())
+                        .foregroundStyle(.white)
+                        .padding(5)
                 }
-                Text("Day \(entry.day)")
-                    .font(.caption2.weight(.semibold))
-                    .padding(4)
-                    .background(.black.opacity(0.5))
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                    .padding(4)
-            }
-            .aspectRatio(3/4, contentMode: .fill)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("\(selectedPose.rawValue) photo, \(photo.label(currentAttempt: challenge.attemptNumber))")
     }
 }
 
+private struct ViewerStart: Identifiable {
+    let id: UUID
+}
+
+/// Full-screen pager with delete. Reads the photo list live, so deleting updates in place.
 private struct PhotoViewerView: View {
     @Environment(\.dismiss) private var dismiss
-    let entries: [(day: Int, photo: ProgressPhoto)]
-    @State var startIndex: Int
+    @Environment(\.modelContext) private var modelContext
 
-    init(entries: [(day: Int, photo: ProgressPhoto)], startIndex: Int) {
-        self.entries = entries
-        self._startIndex = State(initialValue: startIndex)
+    let challenge: Challenge
+    let pose: PhotoPose
+    @State private var currentID: UUID?
+    @State private var confirmDelete = false
+
+    init(challenge: Challenge, pose: PhotoPose, startID: UUID) {
+        self.challenge = challenge
+        self.pose = pose
+        self._currentID = State(initialValue: startID)
     }
 
     var body: some View {
+        let photos = challenge.photos(pose: pose)
+        let current = photos.first { $0.id == currentID }
+
         ZStack {
             Color.black.ignoresSafeArea()
-            TabView(selection: $startIndex) {
-                ForEach(Array(entries.enumerated()), id: \.element.photo.id) { index, entry in
-                    VStack {
-                        if let image = PhotoStorageService.loadImage(fileName: entry.photo.fileName) {
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFit()
-                        }
-                        Text("Day \(entry.day) · \(entry.photo.date.formatted(date: .abbreviated, time: .omitted))")
-                            .foregroundStyle(.white)
-                            .font(.subheadline)
-                            .padding(.bottom, 40)
-                    }
-                    .tag(index)
+
+            TabView(selection: $currentID) {
+                ForEach(photos) { photo in
+                    StoredPhotoView(fileName: photo.fileName, size: .full, contentMode: .fit)
+                        .tag(Optional(photo.id))
+                        .accessibilityLabel("\(pose.rawValue) photo, \(photo.label(currentAttempt: challenge.attemptNumber))")
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
+            .ignoresSafeArea()
 
             VStack {
                 HStack {
+                    circleButton("trash", label: "Delete photo") { confirmDelete = true }
+                        .disabled(current == nil)
                     Spacer()
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .foregroundStyle(.white)
-                            .padding(12)
-                            .background(.black.opacity(0.4), in: Circle())
-                    }
-                    .padding()
+                    circleButton("xmark", label: "Close") { dismiss() }
                 }
+                .padding()
                 Spacer()
+                if let current {
+                    Text("\(current.label(currentAttempt: challenge.attemptNumber)) · \(current.date.formatted(date: .abbreviated, time: .omitted))")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.black.opacity(0.45), in: Capsule())
+                        .padding(.bottom, 30)
+                }
             }
         }
+        .confirmationDialog("Delete this photo?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete Photo", role: .destructive) {
+                if let current { delete(current, from: photos) }
+            }
+        } message: {
+            Text("It's removed from this iPhone. This can't be undone.")
+        }
     }
-}
 
-private struct IdentifiableIndex: Identifiable {
-    let id: Int
-    var index: Int { id }
-}
+    private func circleButton(_ systemImage: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(12)
+                .background(.black.opacity(0.45), in: Circle())
+        }
+        .accessibilityLabel(label)
+    }
 
-private extension Binding where Value == Int? {
-    var asIdentifiableIndex: Binding<IdentifiableIndex?> {
-        Binding<IdentifiableIndex?>(
-            get: { wrappedValue.map(IdentifiableIndex.init) },
-            set: { wrappedValue = $0?.index }
-        )
+    private func delete(_ photo: ProgressPhoto, from photos: [ProgressPhoto]) {
+        let index = photos.firstIndex { $0.id == photo.id } ?? 0
+        let remaining = photos.filter { $0.id != photo.id }
+        let entry = photo.dailyEntry
+        // Checked before deleting: the relationship can still list the photo until save.
+        let wasOnlyPhoto = entry?.photos.allSatisfy { $0.id == photo.id } ?? false
+
+        PhotoStorageService.delete(fileName: photo.fileName)
+        modelContext.delete(photo)
+
+        // Under 75 Hard, removing the day's only photo un-ticks the photo task.
+        if let entry, wasOnlyPhoto, challenge.mode.photoCadence == .daily {
+            entry.markIncomplete(.progressPhoto)
+        }
+        try? modelContext.save()
+
+        if remaining.isEmpty {
+            dismiss()
+        } else {
+            currentID = remaining[min(index, remaining.count - 1)].id
+        }
     }
 }

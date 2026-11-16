@@ -1,7 +1,7 @@
 /* Offline shell for 75. Bump CACHE on every deploy so clients pick up new files. */
 "use strict";
 
-const CACHE = "75-v1";
+const CACHE = "75-v2";
 const SHELL = [
   "./", "./index.html", "./app.css", "./app.js",
   "./manifest.webmanifest",

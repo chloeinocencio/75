@@ -13,18 +13,38 @@ targets:
     platform: iOS
     sources:
       - path: SeventyFive
+    entitlements:
+      path: SeventyFive/SeventyFive.entitlements
+      properties:
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.com.chloeinocencio.seventyfive
+        com.apple.developer.icloud-services:
+          - CloudKit
     info:
       path: SeventyFive/Info.plist
       properties:
         CFBundleDisplayName: "75"
-        UILaunchScreen: {}
-        NSCameraUsageDescription: "75 uses your camera to take your progress photos."
-        NSPhotoLibraryUsageDescription: "Save your progress photos to your library."
-        NSPhotoLibraryAddUsageDescription: "Save your progress photos to your library."
-        NSContactsUsageDescription: "Match your phone contacts to find friends already using 75."
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        # Only Apple-provided encryption (HTTPS / CloudKit) — exempt from export filing,
+        # and declaring it here skips the compliance question on every upload.
+        ITSAppUsesNonExemptEncryption: false
+        NSCameraUsageDescription: "75 uses your camera to take your progress photos. Photos stay on this iPhone."
+        # Saving a comparison to Photos from the share sheet needs add-only access.
+        # Picking a photo uses the system picker, which needs no permission at all.
+        NSPhotoLibraryAddUsageDescription: "Save a before-and-after you choose to share into your photo library."
+        NSFaceIDUsageDescription: "Lock 75 with Face ID so your progress photos stay private."
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.chloeinocencio.seventyfive
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1"
         ENABLE_PREVIEWS: true
+        CODE_SIGN_STYLE: Automatic
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        # Set this to your Apple Developer Team ID (Xcode → Signing & Capabilities),
+        # or leave empty and pick the team in Xcode. CloudKit needs a paid team.
+        DEVELOPMENT_TEAM: ""

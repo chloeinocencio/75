@@ -86,29 +86,37 @@ nobody owns them, per-user goal overrides are a reasonable future addition.
   web build writes a side-by-side image to your downloads; iOS uses the share
   sheet.
 - Photos never leave the device on their own. The web build keeps them in
-  IndexedDB; iOS writes JPEGs to the app's private Application Support
-  directory — not the photo library, not iCloud.
+  IndexedDB. iOS writes them to the app's private Application Support directory with
+  complete file protection (encrypted whenever the phone is locked), downscaled to
+  2400 px. They're not in the photo library, but they *are* part of the user's own
+  encrypted device backup — that's what lets them move to a new iPhone.
+- Delete any photo from the full-screen viewer; under 75 Hard, deleting the day's only
+  photo un-ticks the photo task.
 
 ## Where your data lives
 
-Everything is stored on the device and nowhere else. There is no account, no
-server, and no analytics.
+**Web:** everything is on the device — `localStorage` for the challenge, `IndexedDB`
+for photos. No account, no server-side storage, no analytics. Clearing site data
+erases it; Settings → Start over erases it deliberately. Friends on the web are a
+device-local list and the copy says so plainly.
 
-The web build uses `localStorage` for your challenge and `IndexedDB` for
-photos, which means clearing the browser's site data erases it, and it doesn't
-follow you to another browser or device. Settings → Start over erases it
-deliberately.
+**iOS:** the challenge and photos are on the device (SwiftData + protected files).
+**Friends** is the one optional exception, and is built on CloudKit:
 
-**Friends are device-local too.** You can add people by phone number and keep
-the list, but nothing is transmitted: connecting two phones needs a server this
-build doesn't have. The in-app copy says so plainly rather than implying an
-invite was sent.
+- Identity is the user's iCloud account (an anonymous, app-scoped record ID). No
+  passwords, phone numbers or emails are stored. Sign in with Apple was deliberately
+  *not* used: Apple requires its tokens be revoked server-side on account deletion,
+  which would mean running a server.
+- People connect with an 8-character invite code. A connection only shows progress
+  once **both** people have added each other.
+- Shared: display name, tier, day, streak, today's %. Never photos, notes or weight.
+- Block (hides future requests), Report (emails support), and Delete my Friends
+  profile (removes the profile and every connection the user created) are in the app.
+- Anything fetched from CloudKit is treated as untrusted and clamped/sanitised.
+- CloudKit is Apple-hosted and scales with no server bills on our side.
 
-Adding real sharing would need:
-- Phone verification (Firebase Phone Auth or Twilio Verify)
-- A datastore for friend graphs and daily progress snapshots (Firebase or
-  Supabase are the fastest paths)
-- Push notifications for invites and nudges
+Privacy policy: `web/privacy.html` (served by the web deploy — use its URL in App
+Store Connect).
 
 ## Counting days
 
@@ -124,9 +132,8 @@ the app open past midnight rolls over correctly.
 
 ## Building the iOS app
 
-Swift source plus an [XcodeGen](https://github.com/yonaskolb/XcodeGen)
-manifest, rather than a checked-in `.xcodeproj` (those don't diff or merge
-well). On a Mac with Xcode 15+:
+Swift source plus an [XcodeGen](https://github.com/yonaskolb/XcodeGen) manifest, rather
+than a checked-in `.xcodeproj` (those don't diff or merge well). On a Mac with Xcode 15+:
 
 ```sh
 brew install xcodegen   # one-time
@@ -134,8 +141,34 @@ xcodegen generate
 open SeventyFive.xcodeproj
 ```
 
-Run on a real device to test the camera — the Simulator has no camera, so the
-capture screen shows its permission-denied state there.
+In Xcode → target → Signing & Capabilities, pick your team (or set `DEVELOPMENT_TEAM`
+in `project.yml`). Friends needs a **paid** developer team for iCloud.
+
+The Simulator has no camera, so the capture screen offers the photo picker there.
+Run on a real device to test the camera and Face ID.
+
+### CloudKit setup (once)
+
+1. Xcode → Signing & Capabilities → iCloud: make sure CloudKit is ticked and the
+   container `iCloud.com.chloeinocencio.seventyfive` exists (Xcode creates it).
+2. Run the app on a device signed into iCloud, turn on Friends, and add a friend once —
+   this creates the `Profile` and `Connection` record types in the Development schema.
+3. In [CloudKit Console](https://icloud.developer.apple.com) → Schema → Indexes, add
+   **Queryable** indexes: `Profile.inviteCode`, `Connection.from`, `Connection.to`, and
+   `recordName` on both types.
+4. Before submitting: Schema → **Deploy Schema Changes** to Production.
+
+### App Store checklist
+
+- [ ] Team set, bundle ID `com.chloeinocencio.seventyfive` registered, iCloud container created
+- [ ] CloudKit schema + indexes deployed to Production
+- [ ] Web build deployed so `privacy.html` has a public URL; update `SupportInfo.privacyPolicyURL`
+- [ ] App Store Connect privacy label matches `PrivacyInfo.xcprivacy`: Name, User ID,
+      Fitness — linked to user, not used for tracking, App Functionality only
+- [ ] Support URL + support email (`SupportInfo.email`)
+- [ ] Age rating questionnaire (user-generated content: display names only, with block/report)
+- [ ] Screenshots: 6.9" and 6.5" iPhone
+- [ ] Archive → Validate → Distribute; TestFlight first
 
 ## Layout
 
@@ -143,20 +176,25 @@ capture screen shows its permission-denied state there.
 .replit                Replit run + deploy config
 package.json           npm start -> web/server.js
 web/
-  index.html           App shell
+  index.html           App shell (CSP: no inline script)
   app.css              Theme tokens, light and dark
-  app.js               Rules, storage, screens, camera
-  server.js            Static file server
-project.yml            XcodeGen manifest (target, Info.plist, permissions)
+  app.js               Rules, storage, screens, camera, validated backup import
+  server.js            Hardened static file server
+  privacy.html         Privacy policy (App Store needs a URL)
+project.yml            XcodeGen manifest (target, Info.plist, entitlements)
 SeventyFive/
-  App/                 Entry point + root tab navigation
-  Models/              Challenge, DailyEntry, ProgressPhoto, Friend, ChallengeMode
-  Services/            PhotoStorageService (on-disk JPEG storage)
+  App/                 Entry point, tabs, privacy shield + app lock
+  Design/              Theme tokens, living aura background
+  Models/              Challenge, DailyEntry, ProgressPhoto, ChallengeMode
+  Services/            Photo storage + image cache, reminders, app lock,
+                       Social/ (CloudKit friends)
   Features/
-    Onboarding/        Tier picker (Soft/Medium/Hard) + body weight for Medium
-    Today/             Daily checklist, streak, restart banner
-    ProgressPhoto/     Capture, timeline, before/after compare
-    Friends/           Friend list + sharing toggle (local-only, see above)
+    Onboarding/        Tier picker, locale-aware body weight, health note
+    Today/             Checklist, 75-day mosaic, yesterday grace, finish card
+    ProgressPhoto/     Capture (ghost overlay), timeline + delete, before/after
+    Friends/           Invite codes, requests, block/report
+    Settings/          Reminders, units, app lock, sharing, data
+  Resources/           Asset catalog (icon, colours), PrivacyInfo.xcprivacy
 ```
 
 The Swift module is named `SeventyFive` rather than `75` — a module name can't

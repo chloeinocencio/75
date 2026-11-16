@@ -19,11 +19,13 @@ final class Challenge {
     /// count is clamped to never regress.
     var highestDayReached: Int = 1
     var totalDays: Int
-    var shareProgressWithFriends: Bool
     /// Only set for tiers that scale water to body weight (75 Medium).
     var bodyWeightPounds: Double?
     /// Incremented each time a 75 Hard run resets, so the user keeps a record of attempts.
     var attemptNumber: Int
+    /// Finished or abandoned challenges are archived rather than deleted, so their days and
+    /// photos stay on the device. Only the newest unarchived challenge is shown.
+    var isArchived: Bool = false
 
     @Relationship(deleteRule: .cascade, inverse: \DailyEntry.challenge)
     var days: [DailyEntry] = []
@@ -39,15 +41,15 @@ final class Challenge {
         self.startDay = civil.day ?? 1
         self.highestDayReached = 1
         self.totalDays = totalDays
-        self.shareProgressWithFriends = false
         self.bodyWeightPounds = bodyWeightPounds
         self.attemptNumber = 1
+        self.isArchived = false
     }
 
     /// Calendar for all day arithmetic. Pinned to Gregorian so the stored civil date always
     /// means the same thing, but using the device's *current* time zone, so "today" is
     /// whatever today is where the user actually is.
-    private static var dayCalendar: Calendar {
+    static var dayCalendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current
         return calendar
@@ -58,20 +60,37 @@ final class Challenge {
         set { modeRaw = newValue.rawValue }
     }
 
-    /// Which day of the challenge the user is on, in their local time zone.
+    // MARK: - Day counting
+
+    /// The day number the calendar says it is, *not* clamped to `totalDays` — so it keeps
+    /// counting past the end, which is how the app knows the challenge window has closed.
     ///
     /// Both ends of the comparison are midnights resolved by the same calendar and zone,
     /// so the difference is a whole number of days — which also makes this correct across
     /// a daylight-saving change, where a local day is 23 or 25 hours long.
-    var currentDayNumber: Int {
+    var calendarDayNumber: Int {
         let calendar = Self.dayCalendar
         guard let start = calendar.date(from: DateComponents(year: startYear, month: startMonth, day: startDay)),
               let today = calendar.date(from: calendar.dateComponents([.year, .month, .day], from: .now)),
               let elapsed = calendar.dateComponents([.day], from: start, to: today).day
-        else { return min(max(highestDayReached, 1), totalDays) }
+        else { return max(highestDayReached, 1) }
+        return max(elapsed + 1, highestDayReached, 1)
+    }
 
-        let fromCalendar = min(max(elapsed + 1, 1), totalDays)
-        return min(max(fromCalendar, highestDayReached), totalDays)
+    /// Which day of the challenge the user is on, in their local time zone (1...totalDays).
+    var currentDayNumber: Int {
+        min(calendarDayNumber, totalDays)
+    }
+
+    /// True once the last day of the challenge is behind the user.
+    var isPastFinalDay: Bool { calendarDayNumber > totalDays }
+
+    /// Yesterday's day number while it's still loggable, else nil. Forgetting to open the app
+    /// shouldn't cost someone their 75 Hard run, so the previous day stays editable until
+    /// today ends — the same grace most people give themselves on paper.
+    var yesterdayDayNumber: Int? {
+        let yesterday = calendarDayNumber - 1
+        return (1...totalDays).contains(yesterday) ? yesterday : nil
     }
 
     /// Records the furthest day reached. A computed property can't persist anything, so the
@@ -83,6 +102,8 @@ final class Challenge {
             highestDayReached = reached
         }
     }
+
+    // MARK: - Progress
 
     /// Days belonging to the current attempt. Earlier attempts stay in `days` as history.
     var currentAttemptDays: [DailyEntry] {
@@ -104,15 +125,20 @@ final class Challenge {
         return goal.resolvedLiters(bodyWeightPounds: bodyWeightPounds)
     }
 
-    /// Days that have elapsed in this attempt but were not fully completed. Drives Medium's
-    /// 68-of-75 budget and Hard's reset rule.
-    var missedDayCount: Int {
-        let lastElapsed = currentDayNumber - 1
-        guard lastElapsed >= 1 else { return 0 }
-        return (1...lastElapsed).filter { dayNumber in
+    /// Days 1 through `lastDay` (inclusive) in this attempt that weren't fully completed.
+    func missedDayCount(through lastDay: Int) -> Int {
+        let upper = min(lastDay, totalDays)
+        guard upper >= 1 else { return 0 }
+        return (1...upper).filter { dayNumber in
             guard let entry = entry(forDay: dayNumber) else { return true }
             return !entry.isFullyComplete
         }.count
+    }
+
+    /// Days that have elapsed in this attempt but were not fully completed, counting
+    /// yesterday. Drives 75 Medium's 68-of-75 budget.
+    var missedDayCount: Int {
+        missedDayCount(through: calendarDayNumber - 1)
     }
 
     /// Remaining grace under 75 Medium's allowance; nil where the concept doesn't apply.
@@ -121,26 +147,75 @@ final class Challenge {
         return max(0, budget - missedDayCount)
     }
 
-    /// True when a 75 Hard run has broken its own rule and owes the user a restart.
-    var needsHardReset: Bool {
-        mode.failurePolicy == .restartFromDayOne && missedDayCount > 0
+    /// 75 Medium has used more misses than it allows.
+    var isOverMissBudget: Bool {
+        guard case .allowedMisses(let budget) = mode.failurePolicy else { return false }
+        return missedDayCount > budget
     }
 
+    /// True when a 75 Hard run has broken its own rule and owes the user a restart.
+    /// Yesterday is excluded while it can still be logged.
+    var needsHardReset: Bool {
+        guard mode.failurePolicy == .restartFromDayOne else { return false }
+        return missedDayCount(through: calendarDayNumber - 2) > 0
+    }
+
+    /// Consecutive fully completed days ending today — or ending yesterday, if today is still
+    /// in progress. An unfinished *today* doesn't break a streak; it just hasn't extended it.
     var currentStreak: Int {
-        let sorted = currentAttemptDays.sorted { $0.dayNumber > $1.dayNumber }
+        var day = currentDayNumber
+        if entry(forDay: day)?.isFullyComplete != true { day -= 1 }
         var streak = 0
-        for day in sorted {
-            if day.isFullyComplete {
-                streak += 1
-            } else {
-                break
-            }
+        while day >= 1, entry(forDay: day)?.isFullyComplete == true {
+            streak += 1
+            day -= 1
         }
         return streak
     }
 
+    var bestStreak: Int {
+        var best = 0
+        var run = 0
+        for day in 1...max(currentDayNumber, 1) {
+            if entry(forDay: day)?.isFullyComplete == true {
+                run += 1
+                best = max(best, run)
+            } else {
+                run = 0
+            }
+        }
+        return best
+    }
+
     func entry(forDay dayNumber: Int) -> DailyEntry? {
         days.first { $0.dayNumber == dayNumber && $0.attemptNumber == attemptNumber }
+    }
+
+    /// What a day looks like in the 75-day mosaic.
+    func status(ofDay dayNumber: Int) -> DayStatus {
+        let today = currentDayNumber
+        if dayNumber > today { return .future }
+        let entry = entry(forDay: dayNumber)
+        if entry?.isFullyComplete == true { return .complete }
+        if dayNumber == today && !isPastFinalDay { return .today(entry?.completionFraction ?? 0) }
+        if dayNumber == yesterdayDayNumber { return .open(entry?.completionFraction ?? 0) }
+        return .missed
+    }
+
+    // MARK: - Finishing
+
+    var outcome: ChallengeOutcome {
+        let lastDayDone = currentDayNumber == totalDays && entry(forDay: totalDays)?.isFullyComplete == true
+        guard isPastFinalDay || lastDayDone else { return .inProgress }
+        let misses = missedDayCount(through: totalDays)
+        switch mode.failurePolicy {
+        case .forgiving:
+            return .completed
+        case .allowedMisses(let budget):
+            return misses <= budget ? .completed : .fellShort
+        case .restartFromDayOne:
+            return misses == 0 ? .completed : .fellShort
+        }
     }
 
     /// A photo is *required* today only under 75 Hard. Soft and Medium ask for one on the
@@ -179,4 +254,27 @@ final class Challenge {
             .filter { $0.pose == pose }
             .max { $0.date < $1.date }
     }
+
+    /// Every photo of a pose across all attempts, oldest first.
+    func photos(pose: PhotoPose) -> [ProgressPhoto] {
+        days
+            .sorted { ($0.attemptNumber, $0.dayNumber) < ($1.attemptNumber, $1.dayNumber) }
+            .flatMap { day in day.photos.filter { $0.pose == pose }.sorted { $0.date < $1.date } }
+    }
+}
+
+enum DayStatus: Equatable {
+    case complete
+    /// Today, with how much of it is done.
+    case today(Double)
+    /// Yesterday, not finished but still loggable.
+    case open(Double)
+    case missed
+    case future
+}
+
+enum ChallengeOutcome {
+    case inProgress
+    case completed
+    case fellShort
 }

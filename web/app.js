@@ -346,36 +346,96 @@ async function exportBackup() {
 }
 
 async function importBackup(file) {
+  // Hard cap before reading: a backup of 75 days × 3 poses is well under this.
+  if (file.size > 600 * 1048576) throw new Error("That file is too large to be a 75 backup.");
   const entries = zipRead(await file.arrayBuffer());
   const manifestEntry = entries.find((e) => e.name === "backup.json");
   if (!manifestEntry) throw new Error("This doesn't look like a 75 backup.");
-  const manifest = JSON.parse(new TextDecoder().decode(manifestEntry.data));
-  if (manifest.app !== "75" || !manifest.state) throw new Error("This doesn't look like a 75 backup.");
+  let manifest;
+  try { manifest = JSON.parse(new TextDecoder().decode(manifestEntry.data)); }
+  catch (_) { throw new Error("This doesn't look like a 75 backup."); }
+  if (!manifest || manifest.app !== "75" || !manifest.state || typeof manifest.state !== "object") {
+    throw new Error("This doesn't look like a 75 backup.");
+  }
 
-  // Everything is validated before anything is deleted, so a bad file can't destroy
-  // the data that is already here.
+  // A backup is untrusted input — it may have been edited or sent by someone else. Every
+  // field is rebuilt from known-good shapes, and every photo is resolved, BEFORE anything
+  // on this device is touched, so a bad file can't destroy the data that's already here.
+  const nextState = sanitizeState(manifest.state);
   const byName = new Map(entries.map((e) => [e.name, e.data]));
+  const incoming = [];
+  for (const rec of (Array.isArray(manifest.photos) ? manifest.photos : []).slice(0, 2000)) {
+    const photo = sanitizePhotoRecord(rec);
+    const data = photo && byName.get(rec.file);
+    if (!photo || !data) continue;
+    incoming.push({ ...photo, blob: new Blob([data], { type: "image/jpeg" }) });
+  }
+
   for (const p of photos) { try { await deletePhoto(p.id); } catch (_) {} }
   urls.forEach((u) => URL.revokeObjectURL(u));
   urls.clear();
   photos = [];
 
-  let restored = 0;
-  for (const rec of (manifest.photos || [])) {
-    const data = byName.get(rec.file);
-    if (!data) continue;
-    await putPhoto({
-      day: rec.day, attempt: rec.attempt, pose: rec.pose, ts: rec.ts,
-      blob: new Blob([data], { type: "image/jpeg" })
-    });
-    restored++;
-  }
+  for (const photo of incoming) await putPhoto(photo);
 
-  state = Object.assign(blankState(), manifest.state);
+  state = nextState;
   save();
   await refreshPhotos();
   boot();
-  toast(`Restored \u2014 ${restored} ${restored === 1 ? "photo" : "photos"}.`);
+  toast(`Restored — ${incoming.length} ${incoming.length === 1 ? "photo" : "photos"}.`);
+}
+
+const POSE_NAMES = ["Front", "Side", "Back"];
+const intIn = (v, lo, hi, dflt) => (Number.isInteger(v) && v >= lo && v <= hi ? v : dflt);
+const numIn = (v, lo, hi, dflt) => (typeof v === "number" && Number.isFinite(v) && v >= lo && v <= hi ? v : dflt);
+const shortText = (v, max) => (typeof v === "string" ? v.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, max) : "");
+
+/** Rebuilds app state from an untrusted object, keeping only fields of the right type. */
+function sanitizeState(raw) {
+  const out = blankState();
+  out.tier = Object.prototype.hasOwnProperty.call(TIERS, raw.tier) ? raw.tier : null;
+  if (Array.isArray(raw.start) && raw.start.length === 3) {
+    const [y, m, d] = raw.start;
+    if (intIn(y, 2000, 2200, 0) && intIn(m, 1, 12, 0) && intIn(d, 1, 31, 0)) out.start = [y, m, d];
+  }
+  out.totalDays = intIn(raw.totalDays, 1, 365, 75);
+  out.highestDay = intIn(raw.highestDay, 1, out.totalDays, 1);
+  out.attempt = intIn(raw.attempt, 1, 999, 1);
+  out.bodyWeightLb = numIn(raw.bodyWeightLb, 70, 700, null);
+  out.shareProgress = raw.shareProgress === true;
+  out.theme = raw.theme === "light" || raw.theme === "dark" ? raw.theme : null;
+
+  const days = raw.days && typeof raw.days === "object" ? raw.days : {};
+  for (const key of Object.keys(days).slice(0, 400)) {
+    const n = Number(key);
+    if (!Number.isInteger(n) || n < 1 || n > out.totalDays) continue;
+    const src = days[key] || {};
+    const rec = { checks: {}, counts: {}, rest: src.rest === true };
+    for (const [k, v] of Object.entries(src.checks || {}).slice(0, 20)) {
+      if (/^[a-z-]{1,20}$/.test(k) && v === true) rec.checks[k] = true;
+    }
+    for (const [k, v] of Object.entries(src.counts || {}).slice(0, 20)) {
+      if (/^[a-z-]{1,20}$/.test(k)) rec.counts[k] = numIn(v, 0, 10000, 0);
+    }
+    out.days[n] = rec;
+  }
+
+  out.friends = (Array.isArray(raw.friends) ? raw.friends : []).slice(0, 200).map((f, i) => ({
+    id: intIn(f && f.id, 0, Number.MAX_SAFE_INTEGER, Date.now() + i),
+    name: shortText(f && f.name, 60) || "Friend",
+    phone: shortText(f && f.phone, 30),
+  }));
+  return out;
+}
+
+function sanitizePhotoRecord(rec) {
+  if (!rec || typeof rec.file !== "string" || !POSE_NAMES.includes(rec.pose)) return null;
+  return {
+    day: intIn(rec.day, 1, 365, 1),
+    attempt: intIn(rec.attempt, 1, 999, 1),
+    pose: rec.pose,
+    ts: numIn(rec.ts, 0, 8.64e15, Date.now()),
+  };
 }
 
 /* -------------------------------------------------------------- day math */
@@ -810,7 +870,7 @@ function viewFriends() {
       h += `<div class="person">
           <span class="avatar">${initials}</span>
           <span class="who"><b>${escapeHTML(f.name)}</b><span>${escapeHTML(f.phone)}</span></span>
-          <button class="remove" data-act="removeFriend" data-id="${f.id}" aria-label="Remove ${escapeHTML(f.name)}">${svg(ICON.trash)}</button>
+          <button class="remove" data-act="removeFriend" data-id="${escapeHTML(f.id)}" aria-label="Remove ${escapeHTML(f.name)}">${svg(ICON.trash)}</button>
         </div>`;
     }
     h += "</div>";
@@ -1345,3 +1405,12 @@ setInterval(checkDayChange, 60000);
 
 /* go */
 refreshPhotos().then(boot);
+
+/* Offline shell. Registered after load so it never delays first paint, and only over
+   https or localhost, where service workers are allowed at all. Lives here rather than in
+   an inline <script> so the Content-Security-Policy can forbid inline script entirely. */
+if ("serviceWorker" in navigator) {
+  addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch(() => {});
+  });
+}

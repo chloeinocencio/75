@@ -14,22 +14,24 @@ struct ProgressPhotoCaptureView: View {
     @State private var showGhostOverlay = true
     @State private var ghostOpacity: Double = 0.35
     @State private var alignMode = false
-    @State private var capturedImage: UIImage?
+    /// Held as an Identifiable wrapper in state — not derived through a computed Binding —
+    /// so the review screen keeps one identity. Re-wrapping on every render gave it a new id
+    /// each time, which made SwiftUI dismiss and re-present it (the flicker).
+    @State private var review: CapturedImage?
+    @State private var ghostImage: UIImage?
     @State private var isSaving = false
     @State private var saveError: String?
     @State private var showLibraryPicker = false
     @State private var pickedItem: PhotosPickerItem?
+    @State private var shutterFlash = false
 
-    private var ghostImage: UIImage? {
-        guard let photo = challenge.lastPhoto(before: dailyEntry.dayNumber, pose: pose) else { return nil }
-        return PhotoStorageService.loadImage(fileName: photo.fileName)
-    }
+    private var showsCamera: Bool { camera.isAuthorized && camera.hasCamera }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if camera.isAuthorized {
+            if showsCamera {
                 CameraPreviewView(session: camera.session)
                     .ignoresSafeArea()
 
@@ -41,15 +43,21 @@ struct ProgressPhotoCaptureView: View {
                         .blendMode(alignMode ? .difference : .normal)
                         .ignoresSafeArea()
                         .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                 }
+
+                Color.white
+                    .opacity(shutterFlash ? 0.7 : 0)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
             } else {
-                cameraPermissionPrompt
+                cameraUnavailablePrompt
             }
 
             VStack {
                 topBar
                 Spacer()
-                if camera.isAuthorized {
+                if showsCamera {
                     if ghostImage != nil {
                         alignmentControls
                     }
@@ -64,12 +72,21 @@ struct ProgressPhotoCaptureView: View {
         .statusBarHidden()
         .onAppear { camera.requestAccessAndConfigure() }
         .onDisappear { camera.stop() }
-        .fullScreenCover(item: $capturedImage.asIdentifiableImage) { wrapped in
+        // Decoded once per pose at overlay size, not from disk on every slider movement.
+        .task(id: pose) {
+            if let photo = challenge.lastPhoto(before: dailyEntry.dayNumber, pose: pose) {
+                ghostImage = await ImageCache.shared.load(fileName: photo.fileName, maxPixelSize: PhotoSize.overlay.pixels)
+            } else {
+                ghostImage = nil
+            }
+        }
+        .fullScreenCover(item: $review) { captured in
             PhotoReviewView(
-                image: wrapped.image,
+                image: captured.image,
+                pose: pose,
                 isSaving: isSaving,
-                onRetake: { capturedImage = nil },
-                onUse: { saveCapturedPhoto(wrapped.image) }
+                onRetake: { review = nil },
+                onUse: { saveCapturedPhoto(captured.image) }
             )
         }
         .photosPicker(isPresented: $showLibraryPicker, selection: $pickedItem, matching: .images)
@@ -79,7 +96,7 @@ struct ProgressPhotoCaptureView: View {
                 let data = try? await item.loadTransferable(type: Data.self)
                 await MainActor.run {
                     if let data, let image = UIImage(data: data) {
-                        capturedImage = image
+                        review = CapturedImage(image: image)
                     } else {
                         saveError = "That image couldn't be read."
                     }
@@ -87,8 +104,11 @@ struct ProgressPhotoCaptureView: View {
                 }
             }
         }
-        .alert("Couldn't save photo", isPresented: .constant(saveError != nil)) {
-            Button("OK") { saveError = nil }
+        .alert("Couldn't save photo", isPresented: Binding(
+            get: { saveError != nil },
+            set: { if !$0 { saveError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
         } message: {
             Text(saveError ?? "")
         }
@@ -105,6 +125,7 @@ struct ProgressPhotoCaptureView: View {
                     .padding(12)
                     .background(.black.opacity(0.4), in: Circle())
             }
+            .accessibilityLabel("Close camera")
 
             Spacer()
 
@@ -126,6 +147,9 @@ struct ProgressPhotoCaptureView: View {
                     .padding(12)
                     .background(.black.opacity(0.4), in: Circle())
             }
+            .accessibilityLabel("Switch camera")
+            .opacity(showsCamera ? 1 : 0)
+            .disabled(!showsCamera)
         }
     }
 
@@ -154,6 +178,8 @@ struct ProgressPhotoCaptureView: View {
                 HStack {
                     Image(systemName: "circle.lefthalf.filled")
                     Slider(value: $ghostOpacity, in: 0.1...0.7)
+                        .tint(Theme.lime)
+                        .accessibilityLabel("Guide opacity")
                 }
                 .foregroundStyle(.white.opacity(0.8))
                 .padding(.horizontal, 8)
@@ -168,12 +194,22 @@ struct ProgressPhotoCaptureView: View {
     }
 
     private var poseSelector: some View {
-        Picker("Pose", selection: $pose) {
-            ForEach(PhotoPose.allCases) { pose in
-                Text(pose.rawValue).tag(pose)
+        HStack(spacing: 6) {
+            ForEach(PhotoPose.allCases) { option in
+                Button {
+                    withAnimation(.snappy) { pose = option }
+                } label: {
+                    Text(option.rawValue)
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .foregroundStyle(pose == option ? Theme.limeInk : .white)
+                        .background(pose == option ? Theme.lime : .black.opacity(0.35), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(pose == option ? .isSelected : [])
             }
         }
-        .pickerStyle(.segmented)
         .padding(.top, 12)
     }
 
@@ -185,7 +221,7 @@ struct ProgressPhotoCaptureView: View {
                 Image(systemName: "photo.on.rectangle")
                     .font(.title3)
                     .foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
+                    .frame(width: 48, height: 48)
                     .background(.black.opacity(0.4), in: Circle())
             }
             .accessibilityLabel("Choose a photo")
@@ -193,28 +229,34 @@ struct ProgressPhotoCaptureView: View {
             Spacer()
 
             Button {
+                withAnimation(.easeOut(duration: 0.08)) { shutterFlash = true }
+                withAnimation(.easeIn(duration: 0.25).delay(0.08)) { shutterFlash = false }
                 camera.capturePhoto { image in
-                    guard let image else { return }
-                    capturedImage = image
+                    if let image {
+                        review = CapturedImage(image: image)
+                    } else {
+                        saveError = "The camera wasn't ready. Try again."
+                    }
                 }
             } label: {
                 Circle()
                     .strokeBorder(.white, lineWidth: 4)
-                    .frame(width: 76, height: 76)
-                    .overlay(Circle().fill(.white).frame(width: 64, height: 64).padding(6))
+                    .frame(width: 78, height: 78)
+                    .overlay(Circle().fill(Theme.lime).frame(width: 64, height: 64))
             }
             .accessibilityLabel("Take photo")
+            .sensoryFeedback(.impact(weight: .medium), trigger: shutterFlash) { _, new in new }
 
             Spacer()
 
             // Balances the library button so the shutter stays centred.
-            Color.clear.frame(width: 44, height: 44)
+            Color.clear.frame(width: 48, height: 48)
         }
         .padding(.top, 16)
     }
 
     @ViewBuilder
-    private var cameraPermissionPrompt: some View {
+    private var cameraUnavailablePrompt: some View {
         switch camera.permission {
         case .undetermined:
             // iOS is presenting its own alert over this view. Anything written here would
@@ -241,7 +283,12 @@ struct ProgressPhotoCaptureView: View {
             )
 
         case .authorized:
-            EmptyView()
+            // Authorised but no camera hardware — the Simulator, for one.
+            permissionMessage(
+                icon: "camera.badge.ellipsis",
+                text: "No camera is available here. You can add a photo from your library.",
+                action: nil
+            )
         }
     }
 
@@ -256,7 +303,7 @@ struct ProgressPhotoCaptureView: View {
                 .padding(.horizontal, 32)
             if let action {
                 Button(action.0, action: action.1)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(LimeButtonStyle(compact: true))
             }
             Button("Choose a photo instead") { showLibraryPicker = true }
                 .buttonStyle(.bordered)
@@ -264,11 +311,12 @@ struct ProgressPhotoCaptureView: View {
         }
     }
 
-    /// Saving is fully synchronous (a JPEG encode plus a SwiftData insert), and SwiftData
+    /// Saving is synchronous (a resize, a JPEG encode and a SwiftData insert), and SwiftData
     /// models must only be touched on the main actor — so this deliberately does NOT wrap
     /// the work in a Task.
     @MainActor
     private func saveCapturedPhoto(_ image: UIImage) {
+        guard !isSaving else { return }
         isSaving = true
         defer { isSaving = false }
         do {
@@ -283,7 +331,7 @@ struct ProgressPhotoCaptureView: View {
                 dailyEntry.markComplete(.progressPhoto)
             }
             try modelContext.save()
-            capturedImage = nil
+            review = nil
             dismiss()
         } catch {
             saveError = error.localizedDescription
@@ -291,11 +339,17 @@ struct ProgressPhotoCaptureView: View {
     }
 }
 
+private struct CapturedImage: Identifiable {
+    let id = UUID()
+    let image: UIImage
+}
+
 private struct PhotoReviewView: View {
     let image: UIImage
+    let pose: PhotoPose
     let isSaving: Bool
     let onRetake: () -> Void
-    let onUse: (UIImage) -> Void
+    let onUse: () -> Void
 
     var body: some View {
         ZStack {
@@ -304,42 +358,29 @@ private struct PhotoReviewView: View {
                 .resizable()
                 .scaledToFit()
                 .ignoresSafeArea()
+                .accessibilityLabel("\(pose.rawValue) progress photo preview")
 
             VStack {
                 Spacer()
-                HStack(spacing: 20) {
+                HStack(spacing: 14) {
                     Button("Retake", action: onRetake)
-                        .buttonStyle(.bordered)
-                        .tint(.white)
+                        .buttonStyle(QuietButtonStyle(compact: false))
 
                     Button {
-                        onUse(image)
+                        onUse()
                     } label: {
                         if isSaving {
-                            ProgressView().tint(.black)
+                            ProgressView().tint(Theme.limeInk)
                         } else {
-                            Text("Use Photo")
+                            Text("Use \(pose.rawValue) Photo")
                         }
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(LimeButtonStyle())
                     .disabled(isSaving)
                 }
+                .padding(.horizontal, 24)
                 .padding(.bottom, 40)
             }
         }
-    }
-}
-
-private struct IdentifiableImage: Identifiable {
-    let id = UUID()
-    let image: UIImage
-}
-
-private extension Binding where Value == UIImage? {
-    var asIdentifiableImage: Binding<IdentifiableImage?> {
-        Binding<IdentifiableImage?>(
-            get: { wrappedValue.map(IdentifiableImage.init) },
-            set: { wrappedValue = $0?.image }
-        )
     }
 }

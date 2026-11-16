@@ -6,7 +6,8 @@ import Foundation
 /// - 75 Hard: andyfrisella.com/blogs/articles/what-is-75-hard (the canonical program)
 /// - 75 Soft / 75 Medium: community variants with no single owner; rules here follow the
 ///   most widely published consensus (Cleveland Clinic, Healthline, Marathon Handbook).
-///   Because the softer tiers are not owned by anyone, users can adjust goals in Settings.
+///   Because the softer tiers are not owned by anyone, per-user goal overrides are a
+///   reasonable future addition.
 enum ChallengeMode: String, Codable, CaseIterable, Identifiable {
     case soft = "75 Soft"
     case medium = "75 Medium"
